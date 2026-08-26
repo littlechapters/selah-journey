@@ -1,6 +1,12 @@
-# Selah · Journey — handoff for Claude
+# Selah · Journey — full handoff for Claude
 
-Paste this first. Then open the files in `src/journey/`. They are the source of truth. Do not rebuild from a summary. Do not invent a second Journey.
+**Updated 2026-08-26 15:55 CDT.** This is the complete current source, not a summary.
+
+Paste this file first. Then open `SOURCE.md` (every Journey file concatenated, verbatim). Individual files under `src/journey/` are the same bytes. Do not rebuild from this README. Do not invent a second Journey.
+
+---
+
+## What this product is
 
 You are continuing **Journey**, a section of **Selah**, a Christian mobile-first iOS-feeling app.
 
@@ -8,14 +14,14 @@ Thesis of Selah: *If God is the creator of mathematics, light, cells, music, and
 
 Journey is not Behold (the 3D solar system). Journey is not Bible / Psalm 139. Journey is not Immerse / Genesis. Journey is the living journal: a place to stay with what you are carrying.
 
+The rest of Selah (cosmos, house, Sinai, knit, creation) is **out of scope**. Do not import `@react-three/fiber`, drei, or three into Journey.
+
 ---
 
-## What the owner asked for, in order
+## The conversation, in order (later decisions override earlier ones)
 
-This is the conversation. Treat later decisions as overrides of earlier ones.
-
-### Original brief
-Build Journey tonight, not a wall of text. Tesla first-turn-on energy. Three black onboarding screens first, then a living journal hub containing:
+### 1. Original brief
+Build Journey tonight, not a wall of text. Tesla first-turn-on energy. Three black onboarding screens first (from ChatGPT mockups the owner screenshotted), then a living journal hub containing:
 
 1. Paths (guided walks)
 2. Journaling
@@ -27,37 +33,40 @@ Paywall later. Do not rush. Do not simplify. Compete with multi-million-dollar a
 
 A prior Claude pass had already written a constitution, four paths, both-faces patterns, and ~40/40 tests. That constitution is still law. The first Grok pass of Journey was a skeleton and was rejected.
 
-### Rejection of the skeleton
+### 2. Rejection of the skeleton
 - Do **not** name it “Faith Meets Tuesday.”
-- Onboarding screen 2 must be **exactly** the ChatGPT mockup copy (see locked copy below). An earlier rewrite of that screen was wrong.
+- Onboarding screen 2 must be **exactly** the ChatGPT mockup copy (locked below). An earlier rewrite of that screen was wrong.
 - Hub must look like the Bible section: square tiles, 2-col, numbers, titles. Tiles: Paths, Journal, Focus, Breath, Notes — not Genesis / Exodus.
 - “This is not interactive. It is still a black screen with fields. Haptic and One Year designed real interactions page by page. We need to feel known through selection, not forms.”
 - “Do not return me another workflow that looks like what was already built.”
 - Massive design and interactive updates. Playful micro-interactions. Values saved to the user’s profile. Apple + Tesla spent a year. Figma iOS kits, Apple HIG.
 
-### Focus the rooms, tiles later
+### 3. Focus the rooms, tiles later
 “We can build the tiles later, let’s focus on the rooms. They need real touch interactions — not another black form.” Interiors: 222 full-bleed (one question + chips), Haptic orb, One Year dated pages, stacked choices, swipe, canvas particles.
 
-### Hub cleanup (current)
-The Stay tile grid is the strongest surface. On the hub:
+### 4. Performance
+“Everything is taking forever to load, even the home page.” Cause: Vite watching a huge attachments folder + eager 3D route imports compiling cosmos/house/sinai/creation on every page. Fix (already in): `vite.config.ts` ignores attachments/artifacts/screenshots; Journey is lazy via `deferPage` in `src/routes/journey.tsx`. Do not statically import three.js into Journey.
+
+### 5. Hub cleanup (current, locked)
+Owner screenshots of two hub states. Stay tiles were praised. Known + Continue cluttered the feed.
 
 - Title is **JOURNEY** (all caps).
-- **Stay** with the five room tiles is the first and only primary content.
-- Remove **Known** (the pill list of patterns) from the hub. It clustered the feed.
+- **Stay** with the five room tiles is the first and only primary content on the hub.
+- Remove **Known** (the pill list of patterns) from the hub.
 - Remove **Continue · What you carry** from the hub. Continue lives **inside Paths**, at the top of that room, when a walk is in progress.
 - Rooms are the only primary options on the hub.
 
-### Preview-only: always show the three screens
-For the owner only, until launch: **every time you open Journey, play the three onboarding screens**, even if they have already finished them. Rooms and kept writing persist. Flag:
+### 6. Preview-only: always show the three screens
+Owner, not the final user: **every time you open Journey, play the three onboarding screens**, even if they have already finished them. Rooms and kept writing persist. Flag:
 
-```
-PREVIEW_THRESHOLD_EVERY_VISIT = true
+```ts
+const PREVIEW_THRESHOLD_EVERY_VISIT = true;
 ```
 
 in `src/journey/experience.tsx`. Flip to `false` before launch so returning people go straight to the hub.
 
-### Loading
-The live preview has felt slow because the rest of Selah is heavy 3D (Behold / Sinai / Creation) and Journey was being compiled with it. Journey is now lazy-loaded via `deferPage` in `src/routes/journey.tsx`. Do not statically import three.js into Journey. If the owner says it is still slow, fix Journey’s own first paint (GSAP, onboarding, CSS) without pulling cosmos/house/creation back in.
+### 7. Handoff to Claude
+Owner asked for all Journey code + conversation decisions so they can continue in Claude. This repo is that handoff. Loading still felt slow in the live Grok preview; do not “fix” it by pulling 3D worlds back in.
 
 ---
 
@@ -88,7 +97,7 @@ Word-stagger + glow via GSAP in `glow.tsx` (no Club SplitText). One screen at a 
 
 ### Hub
 - Title: `JOURNEY`
-- Section: `Stay` / `5 ROOMS`
+- Section: `Stay` / `5 rooms`
 - Tiles in order:
   - 01 PATHS — Paths — Four walks
   - 02 JOURNAL — Journal — What is true
@@ -96,8 +105,12 @@ Word-stagger + glow via GSAP in `glow.tsx` (no Club SplitText). One screen at a 
   - 04 BREATH — Breath — Still
   - 05 NOTES — Notes — A sermon kept
 
+No Known. No Continue. No extra feed cards.
+
 ### Paths
 Offered, never assigned. Leave whenever you like. Come back to the same place.
+
+If a walk is in progress, a **Continue** choice sits on top of the stacked doors **inside PathsRoom**, not on the hub.
 
 Four walks, ten stations each:
 
@@ -162,31 +175,40 @@ Voice: honest, specific, I-language, no church-voice filler, no life-coach. God 
 
 ---
 
-## File map
+## File map (this repo)
 
 ```
-src/routes/journey.tsx      lazy route, black fallback
-src/lib/defer-page.tsx      client-only lazy helper (do not SSR WebGL into this)
-src/journey/experience.tsx  gate: threshold → onboard → walk → room → hub
-src/journey/onboarding.tsx  three screens, exact copy
-src/journey/glow.tsx        GSAP word stagger + glow
-src/journey/hub.tsx         JOURNEY + Stay tiles; PathsRoom + Continue
-src/journey/walk.tsx        one station per screen
-src/journey/play.tsx        PatternDeck, swipe, FlipCard, SortBoard, WordVerse, CarryDeck, Dual, Openings
-src/journey/rooms.tsx       Journal, Focus, Breath (orb + canvas), Notes (AI split)
-src/journey/chrome.tsx      Stage, Back, Cta, Choice, Sheet, useDrag, useImmersive, tap haptic
-src/journey/store.ts        persist, rooms, progress, journal, notes, export/erase
-src/journey/paths.ts        four paths, patterns, stations, BSB verses
-src/journey/sermon.ts       splitSermon server function
-src/journey/journey.css     surfaces, tiles, orb, sheets, washes
-tests/journey-paths.test.mjs  constitution
+CLAUDE.md                         this file
+SOURCE.md                         every file below, concatenated, verbatim
+src/routes/journey.tsx            lazy route, black fallback
+src/lib/defer-page.tsx            client-only lazy helper
+src/journey/experience.tsx        gate: threshold → onboard → walk → room → hub
+src/journey/onboarding.tsx        three screens, exact copy
+src/journey/glow.tsx              GSAP word stagger + glow
+src/journey/hub.tsx               JOURNEY + Stay tiles; PathsRoom + Continue
+src/journey/walk.tsx              one station per screen
+src/journey/play.tsx              PatternDeck, swipe, FlipCard, SortBoard, WordVerse, CarryDeck, Dual, Openings
+src/journey/rooms.tsx             Journal, Focus, Breath (orb + canvas), Notes (AI split)
+src/journey/chrome.tsx            Stage, Back, Cta, Choice, Sheet, useDrag, useImmersive, tap haptic
+src/journey/store.ts              persist, rooms, progress, journal, notes, export/erase
+src/journey/paths.ts              four paths, patterns, stations, BSB verses
+src/journey/sermon.ts             splitSermon server function
+src/journey/journey.css           surfaces, tiles, orb, sheets, washes
+src/styles.css                    app tokens Journey inherits (--color-fg, fonts, ease)
+src/components/dock.tsx           Home / Bible / Immerse / Journey
+src/routes/__root.tsx             shell: fonts, dock, full-bleed /journey
+src/routes/bible.tsx              Psalm 139 (not the tile grid; hub tiles were inspired by Apple Bible)
+package.json                      gsap + zustand already present
+tsconfig.json                     @/* → src/*
+vite.config.ts                    watcher ignores + optimizeDeps
+tests/journey-paths.test.mjs      constitution
 ```
 
 ---
 
-## Current flow
+## Current flow (as implemented)
 
-1. Open Journey → (preview) always the three threshold screens.
+1. Open `/journey` → (preview) always the three threshold screens.
 2. Begin my journey → hub: **JOURNEY** / Stay / five tiles. Nothing else.
 3. Paths → stacked doors. If a walk is in progress, a **Continue** choice sits on top.
 4. A walk is one station per screen: read, pattern deck (This is me / Pass + swipe), write with openings, sort into buckets, letter, scripture word-light, mirror (both faces), carry.
@@ -196,6 +218,8 @@ tests/journey-paths.test.mjs  constitution
 8. Notes → keep a line, or paste a sermon and split into keep/pass points.
 
 Dock remains on the hub. Immersive rooms hide it.
+
+`PREVIEW_THRESHOLD_EVERY_VISIT` is currently `true`. Onboarding still calls `finishOnboard()` so persist is intact; the flag only forces the three screens on each mount.
 
 ---
 
