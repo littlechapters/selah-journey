@@ -1,1004 +1,633 @@
-# SOURCE.md — every Journey file, verbatim, as of 2026-08-26 15:55 CDT
-This is the full current code. Individual files in this repo are identical.
-Do not rebuild from a summary. Do not invent a second Journey.
+# SOURCE — Selah Journey (Notes listen lock 2026-08-31)
+
+Concatenated for Claude. Prefer the files under src/journey/ when both exist.
 
 
-========================================================================
-FILE: src/routes/journey.tsx
-BYTES: 409
-LINES: 13
-========================================================================
+===== FILE: src/journey/NOTES_LISTEN_LOCK.md =====
 
-import { createFileRoute } from "@tanstack/react-router";
-import { deferPage } from "@/lib/defer-page";
+# LOCKED — Notes listen page
 
-const JourneyExperience = deferPage(
-  () => import("@/journey/experience").then((m) => ({ default: m.JourneyExperience })),
-  <div className="h-dvh w-full bg-black" />,
-);
+**Do not restyle this rest state.** David signed it off 2026-08-31.
 
-export const Route = createFileRoute("/journey")({ component: Journey });
+Route: Journey hub → NOTES (`room === "notes"`, home mode of `NotesRoom`).
 
-function Journey() {
-  return <JourneyExperience />;
-}
+Surface: [`listen.tsx`](listen.tsx) + listen styles in [`journey.css`](journey.css) (`.jny-press*`, `.jny-listen-copy`).
 
+## What is frozen
 
-========================================================================
-FILE: src/lib/defer-page.tsx
-BYTES: 582
-LINES: 18
-========================================================================
+1. **Glass disc** — frosted circular lens (not gold, not a dark metal puck, not a play triangle). Halo, glass fill, fresnel edge, top sheen, spark, inner rim. Label sits under the disc, not inside it.
+2. **Primary label** — serif: `Start Recording`
+3. **Hint** — one line, smaller sans, slight air under the label (not an inch, not flush):
+   `Keep your phone where it can hear clearly.`
+4. **Subtext** — these exact line breaks, centered, `display:block` + `white-space:nowrap` on each span:
 
-"use client";
+```
+Tap to record a sermon or a podcast.
+Selah transcribes as you listen and gathers
+the key points into clear, thoughtful notes.
 
-import { type ComponentType, type ReactNode, Suspense, lazy, useEffect, useState } from "react";
+Save what stays with you.
+Return to it when you need it.
+```
 
-/** Load a heavy page after first paint so SSR/dev never compile every 3D world up front. */
-export function deferPage(load: () => Promise<{ default: ComponentType<any> }>, fallback: ReactNode) {
-  const Lazy = lazy(load);
-  return function Deferred() {
-    const [on, setOn] = useState(false);
-    useEffect(() => setOn(true), []);
-    if (!on) return <>{fallback}</>;
-    return (
-      <Suspense fallback={fallback}>
-        <Lazy />
-      </Suspense>
-    );
-  };
-}
+5. Quiet links under the copy: **Write a line** / **Paste a transcript**. Kept notes list below if any.
+6. Hub tile for Notes: name `Notes`, line `Listen to what is said`.
 
+## How it works (do not swap for a form)
 
-========================================================================
-FILE: src/journey/experience.tsx
-BYTES: 1240
-LINES: 33
-========================================================================
+- Center glass is the only primary action. Press → mic + live waveform + live words.
+- Live captions: Web Speech API.
+- On stop: WAV (16 kHz) → `transcribeSermon` (xAI STT) when the sitting is long enough; else the live words stand.
+- `splitSermon` (grok-4.5) breaks the speaker’s own points. No counsel, diagnosis, application, or invented action items.
+- Points go to the existing keep/pass deck, then `addNote` in the Journey store (`localStorage`, key `selah-journey-v3`). No accounts.
 
-"use client";
+## Copy you must not “improve”
 
-import { useEffect, useState } from "react";
-import "./journey.css";
-import { Onboarding } from "./onboarding";
-import { Hub, PathsRoom } from "./hub";
-import { Walk } from "./walk";
-import { BreathRoom, FocusRoom, JournalRoom, NotesRoom } from "./rooms";
-import { useJourney } from "./store";
+Do not rewrite the five subtext lines. Do not put “Press to listen” back. Do not put the label inside the glass.
 
-/** Preview only. Flip to false before launch so returning people go straight to the hub. */
-const PREVIEW_THRESHOLD_EVERY_VISIT = true;
+## Files
 
-export function JourneyExperience() {
-  const [ready, setReady] = useState(false);
-  const [threshold, setThreshold] = useState(PREVIEW_THRESHOLD_EVERY_VISIT);
-  const onboarded = useJourney((s) => s.onboarded);
-  const room = useJourney((s) => s.room);
-  const walking = useJourney((s) => s.walking);
+| File | Role |
+|---|---|
+| `src/journey/listen.tsx` | Rest + recording session |
+| `src/journey/sermon.ts` | `splitSermon`, `transcribeSermon` |
+| `src/journey/rooms.tsx` | `NotesRoom` hosts ListenSurface, write/paste, deck, kept pages |
+| `src/journey/journey.css` | `.jny-press*`, `.jny-listen-copy`, waveform |
+| `src/journey/hub.tsx` | NOTES tile |
+| `src/journey/store.ts` | `notes: NoteEntry[]` |
+| `src/journey/experience.tsx` | Preview still shows the 3 threshold screens every visit |
 
-  useEffect(() => setReady(true), []);
-  if (!ready) return <div className="jny" />;
-  if (threshold || !onboarded) {
-    return <Onboarding onDone={() => setThreshold(false)} />;
-  }
-  if (walking) return <Walk pathId={walking} />;
-  if (room === "paths") return <PathsRoom />;
-  if (room === "journal") return <JournalRoom />;
-  if (room === "focus") return <FocusRoom />;
-  if (room === "breath") return <BreathRoom />;
-  if (room === "notes") return <NotesRoom />;
-  return <Hub />;
-}
-
-
-========================================================================
-FILE: src/journey/onboarding.tsx
-BYTES: 2060
-LINES: 73
-========================================================================
+===== FILE: src/journey/listen.tsx =====
 
 "use client";
+
+/**
+ * LOCKED rest state (2026-08-31). See NOTES_LISTEN_LOCK.md.
+ * Glass disc · Start Recording · one-line hint · five subtext lines.
+ * A sitting of a sermon or a podcast becomes a live recording, then
+ * points the speaker actually said — not a meeting tool, not counsel.
+ */
 
 import { useEffect, useRef, useState } from "react";
-import gsap from "gsap";
-import { GlowCopy, type GlowLine } from "./glow";
-import { Cta, useImmersive } from "./chrome";
-import { useJourney } from "./store";
+import { Back, tap } from "./chrome";
+import { splitSermon, transcribeSermon } from "./sermon";
 
-const SCREENS: { lines: GlowLine[]; cta: string }[] = [
-  {
-    lines: [
-      { text: "Are you ready to", quiet: true },
-      { text: "start your journey?", glow: true, display: true },
-    ],
-    cta: "Yes, I am.",
-  },
-  {
-    lines: [
-      { text: "A spiritual journey is" },
-      { text: "a personal process of" },
-      { text: "self-discovery and inner growth", glow: true },
-      { text: "that moves beyond the physical ego" },
-      { text: "to explore deeper questions" },
-      { text: "about existence.", glow: true },
-    ],
-    cta: "Continue",
-  },
-  {
-    lines: [
-      { text: "Your journey", quiet: true },
-      { text: "begins here.", glow: true, display: true },
-    ],
-    cta: "Begin my journey",
-  },
-];
+const TARGET_RATE = 16000;
+const MAX_SECONDS = 8 * 60;
+const MIN_SPLIT = 80;
 
-export function Onboarding({ onDone }: { onDone?: () => void }) {
-  const finish = useJourney((s) => s.finishOnboard);
-  const [i, setI] = useState(0);
-  const ctaRef = useRef<HTMLDivElement>(null);
-  const screen = SCREENS[i];
-  useImmersive(true);
-
-  useEffect(() => {
-    const el = ctaRef.current;
-    if (!el) return;
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduced) return;
-    gsap.fromTo(el, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.7, delay: 0.85, ease: "power3.out" });
-  }, [i]);
-
-  const next = () => {
-    if (i >= SCREENS.length - 1) {
-      finish();
-      onDone?.();
-    } else setI(i + 1);
-  };
-
-  return (
-    <div className="jny jny-full" role="region" aria-label="Begin the journey">
-      <div className="jny-stage jny-threshold">
-        <div className="jny-center" key={i}>
-          <GlowCopy lines={screen.lines} />
-        </div>
-        <div ref={ctaRef} className="jny-cta-slot">
-          <Cta hold onClick={next}>
-            {screen.cta}
-          </Cta>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-
-========================================================================
-FILE: src/journey/glow.tsx
-BYTES: 2064
-LINES: 73
-========================================================================
-
-"use client";
-
-import { useEffect, useRef } from "react";
-import gsap from "gsap";
-
-export type GlowLine = {
-  text: string;
-  glow?: boolean;
-  quiet?: boolean;
-  display?: boolean;
+type SpeechRec = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((ev: SpeechResult) => void) | null;
+  onend: (() => void) | null;
+  onerror: ((ev: { error: string }) => void) | null;
+  start: () => void;
+  stop: () => void;
 };
 
-export function GlowCopy({ lines, align = "left" }: { lines: GlowLine[]; align?: "left" | "center" }) {
-  const root = useRef<HTMLParagraphElement>(null);
+type SpeechResult = {
+  resultIndex: number;
+  results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }>;
+};
+
+function SpeechCtor(): (new () => SpeechRec) | null {
+  if (typeof window === "undefined") return null;
+  const w = window as unknown as { SpeechRecognition?: new () => SpeechRec; webkitSpeechRecognition?: new () => SpeechRec };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
+
+function downsample(input: Float32Array, from: number, to: number) {
+  if (from === to) return input;
+  const ratio = from / to;
+  const n = Math.floor(input.length / ratio);
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) out[i] = input[Math.floor(i * ratio)] ?? 0;
+  return out;
+}
+
+function encodeWav(samples: Float32Array, sampleRate: number) {
+  const n = samples.length;
+  const buf = new ArrayBuffer(44 + n * 2);
+  const view = new DataView(buf);
+  const ascii = (off: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+  };
+  ascii(0, "RIFF");
+  view.setUint32(4, 36 + n * 2, true);
+  ascii(8, "WAVE");
+  ascii(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  ascii(36, "data");
+  view.setUint32(40, n * 2, true);
+  let o = 44;
+  for (let i = 0; i < n; i++, o += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i] ?? 0));
+    view.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return buf;
+}
+
+function toBase64(buf: ArrayBuffer) {
+  const bytes = new Uint8Array(buf);
+  const chunk = 0x2000;
+  let s = "";
+  for (let i = 0; i < bytes.length; i += chunk) {
+    s += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(s);
+}
+
+function clock(ms: number) {
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  return `${String(m).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
+
+export function ListenSurface({
+  onBack,
+  onBroken,
+  onWrite,
+  onPaste,
+  kept,
+}: {
+  onBack: () => void;
+  onBroken: (title: string, body: string, points: string[]) => void;
+  onWrite: () => void;
+  onPaste: () => void;
+  kept: { id: string; title: string; at: number; onOpen: () => void }[];
+}) {
+  const [live, setLive] = useState(false);
+  const [busy, setBusy] = useState<"off" | "hearing" | "settling" | "breaking">("off");
+  const [error, setError] = useState("");
+  const [elapsed, setElapsed] = useState(0);
+  const [finalText, setFinalText] = useState("");
+  const [interim, setInterim] = useState("");
+  const [points, setPoints] = useState<string[]>([]);
+  const [heading, setHeading] = useState("");
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const samples = useRef<Float32Array[]>([]);
+  const sampleCount = useRef(0);
+  const inputRate = useRef(TARGET_RATE);
+  const liveRef = useRef(false);
+  const recRef = useRef<SpeechRec | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const audioRef = useRef<AudioContext | null>(null);
+  const rafRef = useRef(0);
+  const startedAt = useRef(0);
+  const splits = useRef(0);
+  const lastSplitAt = useRef(0);
 
   useEffect(() => {
-    const el = root.current;
-    if (!el) return;
-    const words = el.querySelectorAll<HTMLElement>("span[data-w]");
-    const lit = el.querySelectorAll<HTMLElement>("span.glow");
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduced) {
-      gsap.set(words, { opacity: 1, y: 0, filter: "none" });
-      return;
-    }
-    const ctx = gsap.context(() => {
-      gsap.fromTo(
-        words,
-        { opacity: 0, y: 14, filter: "blur(8px)" },
-        {
-          opacity: 1,
-          y: 0,
-          filter: "blur(0px)",
-          duration: 0.95,
-          stagger: 0.055,
-          ease: "power3.out",
-        },
-      );
-      if (lit.length) {
-        gsap.fromTo(
-          lit,
-          { textShadow: "0 0 0 rgba(255,255,255,0)" },
-          {
-            textShadow: "0 0 10px rgba(255,255,255,0.95), 0 0 28px rgba(255,255,255,0.7), 0 0 56px rgba(255,255,255,0.32)",
-            duration: 1.4,
-            delay: 0.45,
-            ease: "power2.out",
-          },
-        );
-      }
-    }, el);
-    return () => ctx.revert();
-  }, [lines]);
-
-  return (
-    <p ref={root} className={`jny-copy${align === "center" ? " center" : ""}`}>
-      {lines.map((line, i) => (
-        <span
-          key={i}
-          className={`jny-line${line.glow ? " glow-line" : ""}${line.quiet ? " quiet" : ""}${line.display ? " display" : ""}`}
-        >
-          {i > 0 ? <br /> : null}
-          {line.text.split(" ").map((word, j, arr) => (
-            <span key={j} data-w className={line.glow ? "glow" : undefined}>
-              {word}
-              {j < arr.length - 1 ? "\u00a0" : ""}
-            </span>
-          ))}
-        </span>
-      ))}
-    </p>
-  );
-}
-
-
-========================================================================
-FILE: src/journey/hub.tsx
-BYTES: 4909
-LINES: 147
-========================================================================
-
-"use client";
-
-import { useEffect, useMemo, useRef } from "react";
-import gsap from "gsap";
-import { PATHS } from "./paths";
-import { Back, Choice, Choices, Stage, tap, useImmersive } from "./chrome";
-import { useJourney, type Room } from "./store";
-
-const ROOMS: { id: Room; n: string; title: string; name: string; line: string; art: string }[] = [
-  { id: "paths", n: "01", title: "PATHS", name: "Paths", line: "Four walks", art: "ticks" },
-  { id: "journal", n: "02", title: "JOURNAL", name: "Journal", line: "What is true", art: "rules" },
-  { id: "focus", n: "03", title: "FOCUS", name: "Focus", line: "One thing", art: "dot" },
-  { id: "breath", n: "04", title: "BREATH", name: "Breath", line: "Still", art: "orb" },
-  { id: "notes", n: "05", title: "NOTES", name: "Notes", line: "A sermon kept", art: "quote" },
-];
-
-function TileArt({ art }: { art: string }) {
-  if (art === "ticks") return <span className="jny-art ticks" aria-hidden="true" />;
-  if (art === "rules") return <span className="jny-art rules" aria-hidden="true" />;
-  if (art === "dot") return <span className="jny-art dot" aria-hidden="true" />;
-  if (art === "orb") return <span className="jny-art orb" aria-hidden="true" />;
-  return (
-    <span className="jny-art quote" aria-hidden="true">
-      “
-    </span>
-  );
-}
-
-function useResume() {
-  const progress = useJourney((s) => s.progress);
-  return useMemo(() => {
-    for (const p of PATHS) {
-      const at = progress[p.id];
-      if (!at) continue;
-      if ((at.station ?? 0) > 0 || (at.tapped?.length ?? 0) > 0) {
-        return { path: p, at };
-      }
-    }
-    return null;
-  }, [progress]);
-}
-
-export function Hub() {
-  const setRoom = useJourney((s) => s.setRoom);
-  const grid = useRef<HTMLDivElement>(null);
+    liveRef.current = live;
+  }, [live]);
 
   useEffect(() => {
-    const el = grid.current;
-    if (!el) return;
-    const tiles = el.querySelectorAll(".jny-tile");
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduced) return;
-    gsap.fromTo(
-      tiles,
-      { opacity: 0, y: 16, filter: "blur(8px)" },
-      { opacity: 1, y: 0, filter: "blur(0px)", duration: 0.55, stagger: 0.06, ease: "power3.out" },
-    );
+    return () => stopAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return (
-    <Stage className="jny-hub">
-      <h1 className="jny-display">JOURNEY</h1>
+  const stopAll = () => {
+    liveRef.current = false;
+    recRef.current?.stop();
+    recRef.current = null;
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    if (audioRef.current && audioRef.current.state !== "closed") void audioRef.current.close();
+    audioRef.current = null;
+    cancelAnimationFrame(rafRef.current);
+  };
 
-      <div className="jny-section">
-        <h2>Stay</h2>
-        <span>5 rooms</span>
-      </div>
+  const maybeSplit = async (text: string, force = false) => {
+    const words = text.trim().split(/\s+/).filter(Boolean).length;
+    if (!force && words < MIN_SPLIT) return;
+    if (!force && splits.current >= 3) return;
+    if (!force && Date.now() - lastSplitAt.current < 28000) return;
+    lastSplitAt.current = Date.now();
+    splits.current += 1;
+    try {
+      const result = await splitSermon({ data: { text } });
+      if (!result.ok) return;
+      setPoints(result.points);
+      setHeading(result.title);
+    } catch {
+      /* live split is a gift, not a requirement */
+    }
+  };
 
-      <div className="jny-bible-grid" ref={grid}>
-        {ROOMS.map((r) => (
-          <button
-            key={r.id}
-            type="button"
-            className="jny-tile"
-            onClick={() => {
-              tap();
-              setRoom(r.id);
-            }}
-          >
-            <span className="jny-tile-face">
-              <span className="jny-tile-num">{r.n}</span>
-              <TileArt art={r.art} />
-              <span className="jny-tile-name">{r.title}</span>
-            </span>
-            <span className="jny-tile-meta">
-              <strong>{r.name}</strong>
-              <span>{r.line}</span>
-            </span>
-          </button>
-        ))}
-      </div>
-    </Stage>
-  );
-}
+  const start = async () => {
+    setError("");
+    setFinalText("");
+    setInterim("");
+    setPoints([]);
+    setHeading("");
+    setElapsed(0);
+    samples.current = [];
+    sampleCount.current = 0;
+    splits.current = 0;
+    lastSplitAt.current = 0;
+    tap();
 
-export function PathsRoom() {
-  const setRoom = useJourney((s) => s.setRoom);
-  const start = useJourney((s) => s.startWalk);
-  const progress = useJourney((s) => s.progress);
-  const resume = useResume();
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
+      });
+    } catch {
+      setError("This device is not letting us hear. You can still write what stayed.");
+      return;
+    }
+    streamRef.current = stream;
 
-  useImmersive(true);
+    const ctx = new AudioContext();
+    audioRef.current = ctx;
+    if (ctx.state === "suspended") await ctx.resume();
+    inputRate.current = ctx.sampleRate;
+    const src = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.55;
+    src.connect(analyser);
 
-  return (
-    <div className="jny jny-full">
-      <div className="jny-stage jny-threshold">
-        <Back onClick={() => setRoom("hub")}>Back</Back>
-        <p className="jny-kicker">Paths</p>
-        <h1 className="jny-title">Offered, never assigned.</h1>
-        <p className="jny-sub">Leave whenever you like. Come back to the same place.</p>
-        <div className="jny-scroll">
-          <Choices>
-            {resume ? (
-              <Choice
-                kicker="Continue"
-                title={resume.path.title}
-                line={
-                  resume.at.carrying
-                    ? "Carrying what it was for"
-                    : `Where you left off · ${resume.at.station + 1} of ${resume.path.stations.length}`
-                }
-                on
-                onClick={() => start(resume.path.id)}
-              />
-            ) : null}
-            {PATHS.map((p) => {
-              const at = progress[p.id];
-              const resumed = (at?.station ?? 0) > 0 || (at?.tapped?.length ?? 0) > 0;
-              const carried = p.patterns.find((x) => x.id === at?.carrying);
-              if (resume && p.id === resume.path.id) return null;
-              return (
-                <Choice
-                  key={p.id}
-                  kicker={carried ? "Carrying" : resumed ? "Return" : p.kicker}
-                  title={p.title}
-                  line={p.about}
-                  on={resumed}
-                  onClick={() => start(p.id)}
-                />
-              );
-            })}
-          </Choices>
-        </div>
-      </div>
-    </div>
-  );
-}
+    const proc = ctx.createScriptProcessor(4096, 1, 1);
+    const mute = ctx.createGain();
+    mute.gain.value = 0;
+    src.connect(proc);
+    proc.connect(mute);
+    mute.connect(ctx.destination);
+    proc.onaudioprocess = (ev) => {
+      if (!liveRef.current) return;
+      if (sampleCount.current / inputRate.current > MAX_SECONDS) return;
+      const chan = ev.inputBuffer.getChannelData(0);
+      samples.current.push(new Float32Array(chan));
+      sampleCount.current += chan.length;
+    };
 
+    const bars = new Uint8Array(analyser.frequencyBinCount);
+    const draw = () => {
+      const el = canvas.current;
+      if (!el || !liveRef.current) return;
+      analyser.getByteFrequencyData(bars);
+      const w = el.width;
+      const h = el.height;
+      const g = el.getContext("2d");
+      if (!g) return;
+      g.clearRect(0, 0, w, h);
+      const n = 56;
+      const gap = 3 * (window.devicePixelRatio || 1);
+      const bw = (w - gap * (n - 1)) / n;
+      const mid = h / 2;
+      for (let i = 0; i < n; i++) {
+        const v = (bars[Math.floor((i / n) * bars.length)] ?? 0) / 255;
+        const amp = Math.max(3, v * (h * 0.46));
+        const x = i * (bw + gap);
+        g.fillStyle = `rgba(243, 232, 210, ${0.28 + v * 0.72})`;
+        const y = mid - amp;
+        const hh = amp * 2;
+        if (typeof g.roundRect === "function") {
+          g.beginPath();
+          g.roundRect(x, y, bw, hh, Math.min(bw / 2, 3));
+          g.fill();
+        } else {
+          g.fillRect(x, y, bw, hh);
+        }
+      }
+      rafRef.current = requestAnimationFrame(draw);
+    };
 
-========================================================================
-FILE: src/journey/walk.tsx
-BYTES: 8173
-LINES: 249
-========================================================================
+    const Ctor = SpeechCtor();
+    if (Ctor) {
+      const rec = new Ctor();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = "en-US";
+      rec.onresult = (ev) => {
+        let fin = "";
+        let inter = "";
+        for (let i = ev.resultIndex; i < ev.results.length; i++) {
+          const row = ev.results[i];
+          if (!row) continue;
+          if (row.isFinal) fin += row[0].transcript;
+          else inter += row[0].transcript;
+        }
+        if (fin) {
+          setFinalText((prev) => {
+            const next = `${prev} ${fin}`.replace(/\s+/g, " ").trim();
+            void maybeSplit(next);
+            return next;
+          });
+        }
+        setInterim(inter);
+      };
+      rec.onend = () => {
+        if (liveRef.current) {
+          try {
+            rec.start();
+          } catch {
+            /* already running */
+          }
+        }
+      };
+      rec.onerror = (ev) => {
+        if (ev.error === "not-allowed") setError("This device is not letting us hear.");
+      };
+      recRef.current = rec;
+      try {
+        rec.start();
+      } catch {
+        /* some browsers throw if started twice */
+      }
+    }
 
-"use client";
-
-import { useEffect, useState } from "react";
-import { pathById, type Station } from "./paths";
-import { Back, Cta, Kicker, Reveal, tap, useImmersive } from "./chrome";
-import { useJourney } from "./store";
-import {
-  CarryDeck,
-  FlipCard,
-  Openings,
-  PatternDeck,
-  ReadReveal,
-  SortBoard,
-  WordVerse,
-} from "./play";
-
-export function Walk({ pathId }: { pathId: string }) {
-  const path = pathById(pathId);
-  const leave = useJourney((s) => s.leaveWalk);
-  const patch = useJourney((s) => s.patchProgress);
-  const saved = useJourney((s) => s.progress[pathId]);
-  const stationI = saved?.station ?? 0;
-  const tapped = saved?.tapped ?? [];
-  const sorted = saved?.sorted ?? {};
-  const letter = saved?.letter ?? "";
-  const origin = saved?.origin ?? "";
-  const carrying = saved?.carrying;
-  const [piece, setPiece] = useState(0);
-  const [why, setWhy] = useState(false);
-  const [flipped, setFlipped] = useState(false);
-  const [draft, setDraft] = useState("");
-
-  useImmersive(true);
+    startedAt.current = Date.now();
+    liveRef.current = true;
+    setLive(true);
+    setBusy("hearing");
+    draw();
+  };
 
   useEffect(() => {
-    setPiece(0);
-    setWhy(false);
-    setFlipped(false);
-    const station = path?.stations[Math.min(stationI, (path?.stations.length ?? 1) - 1)];
-    if (station?.kind === "letter") setDraft(letter);
-    else if (station?.kind === "write") setDraft(origin);
-    else setDraft("");
-  }, [stationI, pathId, path, letter, origin]);
+    if (!live) return;
+    const id = window.setInterval(() => setElapsed(Date.now() - startedAt.current), 250);
+    return () => window.clearInterval(id);
+  }, [live]);
 
-  if (!path) return null;
+  const stop = async () => {
+    if (!liveRef.current) return;
+    liveRef.current = false;
+    setLive(false);
+    recRef.current?.stop();
+    recRef.current = null;
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    cancelAnimationFrame(rafRef.current);
 
-  const station = path.stations[Math.min(stationI, path.stations.length - 1)];
-  const last = stationI >= path.stations.length - 1;
-  const chosen = path.patterns.filter((p) => tapped.includes(p.id));
-  const verses = station.scriptures ?? (station.scripture ? [station.scripture] : []);
-  const sortItems = chosen;
-  const mirrorItems = chosen;
-  const ownCta = station.kind !== "patterns";
+    const chunks = samples.current;
+    samples.current = [];
+    if (audioRef.current && audioRef.current.state !== "closed") void audioRef.current.close();
+    audioRef.current = null;
 
-  const innerLast = (() => {
-    if (station.kind === "sort" && sortItems.length) return piece >= sortItems.length - 1;
-    if (station.kind === "mirror" && mirrorItems.length) return piece >= mirrorItems.length - 1;
-    if (station.kind === "scripture" && verses.length) return piece >= verses.length - 1;
-    return true;
-  })();
+    const spoken = `${finalText} ${interim}`.replace(/\s+/g, " ").trim();
+    setInterim("");
+    let body = spoken;
 
-  const go = (delta: number) => {
-    const n = Math.max(0, Math.min(path.stations.length - 1, stationI + delta));
-    if (station.kind === "write") patch(pathId, { origin: draft, station: n });
-    else if (station.kind === "letter") patch(pathId, { letter: draft, station: n });
-    else patch(pathId, { station: n });
-  };
+    const total = chunks.reduce((n, c) => n + c.length, 0);
+    if (total > TARGET_RATE * 4) {
+      setBusy("settling");
+      const merged = new Float32Array(total);
+      let o = 0;
+      for (const c of chunks) {
+        merged.set(c, o);
+        o += c.length;
+      }
+      const down = downsample(merged, inputRate.current, TARGET_RATE);
+      const wav = encodeWav(down, TARGET_RATE);
+      try {
+        const result = await transcribeSermon({ data: { wav: toBase64(wav) } });
+        if (result.ok && result.text.length > body.length * 0.6) body = result.text;
+      } catch {
+        /* live words still stand */
+      }
+    }
 
-  const advance = () => {
-    tap();
-    if (!innerLast) {
-      setPiece((p) => p + 1);
-      setWhy(false);
-      setFlipped(false);
+    if (body.length < 40) {
+      setBusy("off");
+      setFinalText(body);
+      setError(body ? "A little more of what was said is needed." : "Nothing was heard yet.");
       return;
     }
-    if (last) leave();
-    else go(1);
-  };
 
-  const retreat = () => {
-    if (piece > 0) {
-      setPiece((p) => p - 1);
-      setWhy(false);
-      setFlipped(false);
-      return;
+    setBusy("breaking");
+    setFinalText(body);
+    try {
+      const result = await splitSermon({ data: { text: body } });
+      if (!result.ok) {
+        setError(result.error);
+        setBusy("off");
+        return;
+      }
+      onBroken(result.title, body, result.points);
+    } catch {
+      setError("The notes could not be broken up just now.");
     }
-    if (stationI > 0) go(-1);
+    setBusy("off");
   };
 
-  const toggle = (id: string) => {
-    const next = tapped.includes(id) ? tapped.filter((x) => x !== id) : [...tapped, id];
-    patch(pathId, { tapped: next });
-  };
-
-  const verse = verses[Math.min(piece, Math.max(verses.length - 1, 0))];
-  const notes = station.notes ?? [];
+  const hearing = live || busy === "hearing";
+  const working = busy === "settling" || busy === "breaking";
 
   return (
     <div className="jny jny-full">
-      <div className="jny-stage jny-threshold">
-        <div className="jny-top">
-          <Back onClick={leave}>Leave</Back>
-          <span className="jny-count">
-            {stationI + 1} of {path.stations.length}
-          </span>
-        </div>
-        <div className="jny-thread" aria-hidden="true">
-          {path.stations.map((s, i) => (
-            <i key={s.id} className={i <= stationI ? "on" : undefined} />
-          ))}
-        </div>
-        <Kicker>{station.kicker}</Kicker>
-        <Reveal text={station.title} />
+      <div className="jny-stage jny-threshold jny-listen-stage">
+        <Back onClick={hearing || working ? () => void stop() : onBack}>{hearing || working ? "Stop" : "Back"}</Back>
+        <p className="jny-kicker">{hearing ? "Listening" : working ? "Keeping" : "Notes"}</p>
 
-        {station.kind === "read" && <ReadReveal station={station} />}
-
-        {station.kind === "patterns" && (
-          <PatternDeck patterns={path.patterns} tapped={tapped} onToggle={toggle} onDone={advance} />
-        )}
-
-        {(station.kind === "write" || station.kind === "letter") && (
-          <WriteStation station={station} draft={draft} setDraft={setDraft} />
-        )}
-
-        {station.kind === "sort" && (
-          <SortBoard
-            items={sortItems}
-            buckets={station.buckets ?? []}
-            sorted={sorted}
-            index={piece}
-            onSort={(id, bucket) => {
-              patch(pathId, { sorted: { ...sorted, [id]: bucket } });
-              if (piece < sortItems.length - 1) {
-                window.setTimeout(() => {
-                  setPiece((p) => p + 1);
-                }, 280);
-              }
-            }}
-          />
-        )}
-
-        {station.kind === "scripture" && verse && (
-          <div className="jny-scroll">
-            {station.body ? <p className="jny-body">{station.body}</p> : null}
-            <WordVerse verse={verse} />
-            {station.reading ? <p className="jny-reading">{station.reading}</p> : null}
-            {notes.length > 0 && (
-              <button type="button" className="jny-why" onClick={() => setWhy((v) => !v)}>
-                {why ? "Hide this" : "Why this is here"}
+        <div className="jny-listen-core">
+          {hearing ? (
+            <>
+              <div className="jny-rec-head">
+                <i className="jny-rec-dot" aria-hidden="true" />
+                <span>{clock(elapsed)}</span>
+              </div>
+              <button type="button" className="jny-wave-wrap" onClick={() => void stop()} aria-label="Stop listening">
+                <canvas ref={canvas} className="jny-wave" width={640} height={160} />
               </button>
-            )}
-            {why &&
-              notes.map((n) => (
-                <div key={n.source} className="jny-sheet-card">
-                  <p>{n.text}</p>
-                  <p className="jny-caveat">{n.source}</p>
-                  <p className="jny-caveat">{n.caveat}</p>
+              <p className="jny-wave-hint">Tap to stop</p>
+            </>
+          ) : working ? (
+            <p className="jny-listen">{busy === "settling" ? "Settling the words…" : "Breaking into points…"}</p>
+          ) : (
+            <button type="button" className="jny-press" onClick={() => void start()}>
+              <span className="jny-press-halo" aria-hidden="true" />
+              <span className="jny-press-disc" aria-hidden="true">
+                <span className="jny-press-glass" />
+                <span className="jny-press-edge" />
+                <span className="jny-press-sheen" />
+                <span className="jny-press-spark" />
+                <span className="jny-press-rim" />
+              </span>
+              <strong>Start Recording</strong>
+              <em>Keep your phone where it can hear clearly.</em>
+            </button>
+          )}
+        </div>
+
+        {!hearing && !working ? (
+          <div className="jny-listen-copy">
+            <p>
+              <span>Tap to record a sermon or a podcast.</span>
+              <span>Selah transcribes as you listen and gathers</span>
+              <span>the key points into clear, thoughtful notes.</span>
+            </p>
+            <p>
+              <span>Save what stays with you.</span>
+              <span>Return to it when you need it.</span>
+            </p>
+          </div>
+        ) : null}
+
+        {(finalText || interim) && (hearing || error) ? (
+          <p className="jny-caption">
+            {finalText} {interim ? <em>{interim}</em> : null}
+          </p>
+        ) : null}
+
+        {points.length && hearing ? (
+          <ol className="jny-forming">
+            {heading ? <p className="jny-forming-title">{heading}</p> : null}
+            {points.slice(0, 6).map((p) => (
+              <li key={p}>{p}</li>
+            ))}
+          </ol>
+        ) : null}
+
+        {error ? <p className="jny-note">{error}</p> : null}
+
+        {!hearing && !working ? (
+          <>
+            <div className="jny-quiet-row">
+              <button type="button" className="jny-text-link" onClick={onWrite}>
+                Write a line
+              </button>
+              <button type="button" className="jny-text-link" onClick={onPaste}>
+                Paste a transcript
+              </button>
+            </div>
+            {kept.length ? (
+              <div className="jny-scroll jny-listen-kept">
+                <div className="jny-section">
+                  <h2>Kept</h2>
+                  <span>{kept.length}</span>
                 </div>
-              ))}
-          </div>
-        )}
-
-        {station.kind === "mirror" && (
-          <div className="jny-scroll">
-            {station.body ? <p className="jny-body">{station.body}</p> : null}
-            {mirrorItems.length ? (
-              <FlipCard
-                pattern={mirrorItems[Math.min(piece, mirrorItems.length - 1)]}
-                flipped={flipped}
-                onFlip={() => {
-                  tap();
-                  setFlipped((v) => !v);
-                }}
-              />
-            ) : (
-              <p className="jny-body">Nothing was tapped. You can go back, or continue.</p>
-            )}
-            {station.reading ? <p className="jny-reading">{station.reading}</p> : null}
-          </div>
-        )}
-
-        {station.kind === "carry" && (
-          <div className="jny-scroll">
-            {station.body ? <p className="jny-body">{station.body}</p> : null}
-            <CarryDeck
-              items={chosen.length ? chosen : path.patterns}
-              carrying={carrying}
-              onCarry={(id) => patch(pathId, { carrying: id })}
-            />
-            {station.scripture ? <WordVerse verse={station.scripture} /> : null}
-            {station.reading ? <p className="jny-reading">{station.reading}</p> : null}
-            {station.note ? <p className="jny-note">{station.note}</p> : null}
-          </div>
-        )}
-
-        {ownCta ? (
-          <div className="jny-nav">
-            {stationI > 0 || piece > 0 ? <Back onClick={retreat}>Back</Back> : null}
-            <Cta onClick={advance}>{last && innerLast ? "Return" : "Continue"}</Cta>
-          </div>
+                {kept.map((n) => (
+                  <button key={n.id} type="button" className="jny-kept-row" onClick={n.onOpen}>
+                    <time>
+                      {new Date(n.at).toLocaleDateString(undefined, { month: "long", day: "numeric" })}
+                    </time>
+                    <p>{n.title}</p>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </>
         ) : null}
       </div>
     </div>
   );
 }
 
-function WriteStation({
-  station,
-  draft,
-  setDraft,
-}: {
-  station: Station;
-  draft: string;
-  setDraft: (v: string) => void;
-}) {
-  const [paper, setPaper] = useState(Boolean(draft.trim()));
-  useEffect(() => {
-    setPaper(Boolean(draft.trim()));
-  }, [station.id]);
+===== FILE: src/journey/sermon.ts =====
 
-  return (
-    <div className="jny-scroll">
-      {station.body ? <p className="jny-body">{station.body}</p> : null}
-      {station.prompt ? <p className="jny-body">{station.prompt}</p> : null}
-      {!paper && station.openings ? (
-        <Openings
-          openings={station.openings}
-          onPick={(o) => {
-            setDraft(`${o} `);
-            setPaper(true);
-          }}
-        />
-      ) : (
-        <textarea
-          className="jny-paper"
-          value={draft}
-          placeholder={station.placeholder || "Begin here."}
-          onChange={(e) => setDraft(e.target.value)}
-        />
-      )}
-      {!paper && station.openings ? (
-        <button type="button" className="jny-text-link" onClick={() => setPaper(true)}>
-          Write without an opening
-        </button>
-      ) : null}
-    </div>
-  );
-}
+import { createServerFn } from "@tanstack/react-start";
 
+type SplitOk = { ok: true; points: string[]; title: string };
+type SplitErr = { ok: false; error: string };
+export type SplitResult = SplitOk | SplitErr;
 
-========================================================================
-FILE: src/journey/play.tsx
-BYTES: 8490
-LINES: 321
-========================================================================
+export const splitSermon = createServerFn({ method: "POST" })
+  .validator((input: { text: string }) => {
+    const text = typeof input?.text === "string" ? input.text.trim() : "";
+    return { text };
+  })
+  .handler(async ({ data }): Promise<SplitResult> => {
+    const text = data.text;
+    if (text.length < 40) return { ok: false, error: "A little more of what was said is needed." };
+    if (text.length > 12000) return { ok: false, error: "Keep it to one sitting of notes." };
 
-"use client";
+    const apiKey = process.env.XAI_API_KEY;
+    if (!apiKey) return { ok: false, error: "Breaking this into points is not available here yet." };
 
-import { useEffect, useState, type ReactNode } from "react";
-import type { Pattern, Station, Verse } from "./paths";
-import { Choice, Choices, Cta, tap, useDrag } from "./chrome";
+    const res = await fetch("https://api.x.ai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "grok-4.5",
+        max_tokens: 900,
+        temperature: 0.2,
+        messages: [
+          {
+            role: "system",
+            content:
+              'You extract the speaker\'s own points from a sermon or Christian podcast. Return JSON only: {"title":"...","points":["..."]}. Title: 2 to 7 words, from their language, no slogan. 4 to 12 short points. Use the speaker\'s language. Do not add counsel, diagnosis, application, or verses they did not say. Do not moralise. Do not invent action items.',
+          },
+          { role: "user", content: text },
+        ],
+      }),
+    });
 
-export function Dual({
-  primary,
-  secondary,
-  onPrimary,
-  onSecondary,
-}: {
-  primary: string;
-  secondary: string;
-  onPrimary: () => void;
-  onSecondary: () => void;
-}) {
-  return (
-    <div className="jny-dual">
-      <button
-        type="button"
-        className="jny-cta"
-        onClick={() => {
-          tap();
-          onPrimary();
-        }}
-      >
-        {primary}
-      </button>
-      <button
-        type="button"
-        className="jny-cta ghost"
-        onClick={() => {
-          tap();
-          onSecondary();
-        }}
-      >
-        {secondary}
-      </button>
-    </div>
-  );
-}
+    if (!res.ok) return { ok: false, error: "The notes could not be broken up just now." };
 
-export function PatternDeck({
-  patterns,
-  tapped,
-  onToggle,
-  onDone,
-}: {
-  patterns: Pattern[];
-  tapped: string[];
-  onToggle: (id: string) => void;
-  onDone: () => void;
-}) {
-  const [i, setI] = useState(0);
-  const [leaving, setLeaving] = useState<"keep" | "pass" | null>(null);
-  const done = i >= patterns.length;
-  const current = patterns[i];
-  const kept = patterns.filter((p) => tapped.includes(p.id));
-
-  useEffect(() => {
-    setI(0);
-  }, [patterns]);
-
-  const choose = (keep: boolean) => {
-    if (!current || leaving) return;
-    if (keep && !tapped.includes(current.id)) onToggle(current.id);
-    if (!keep && tapped.includes(current.id)) onToggle(current.id);
+    const body = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    const raw = body.choices?.[0]?.message?.content ?? "";
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start < 0 || end <= start) return { ok: false, error: "Nothing clear enough to keep yet." };
     try {
-      navigator.vibrate?.(keep ? 12 : 6);
+      const parsed = JSON.parse(raw.slice(start, end + 1)) as { points?: unknown; title?: unknown };
+      const points = Array.isArray(parsed.points)
+        ? parsed.points.map((p) => String(p).trim()).filter((p) => p.length > 0).slice(0, 12)
+        : [];
+      if (!points.length) return { ok: false, error: "Nothing clear enough to keep yet." };
+      const title = typeof parsed.title === "string" && parsed.title.trim() ? parsed.title.trim().slice(0, 80) : "What was said";
+      return { ok: true, points, title };
     } catch {
-      /* no haptic */
+      return { ok: false, error: "Nothing clear enough to keep yet." };
     }
-    setLeaving(keep ? "keep" : "pass");
-    window.setTimeout(() => {
-      setLeaving(null);
-      setI((n) => n + 1);
-    }, 280);
-  };
-
-  const { dx, bind } = useDrag((dir) => {
-    if (dir === "right") choose(true);
-    else choose(false);
   });
 
-  if (done) {
-    return (
-      <div className="jny-scroll">
-        <p className="jny-kicker">Kept</p>
-        <h1 className="jny-title">Here is what sounded like you</h1>
-        {kept.length === 0 ? (
-          <p className="jny-body">Nothing was kept. That is allowed. You can go back, or continue.</p>
-        ) : (
-          <Choices>
-            {kept.map((p, n) => (
-              <Choice
-                key={p.id}
-                kicker={String(n + 1).padStart(2, "0")}
-                title={p.label}
-                on
-                onClick={() => onToggle(p.id)}
-              />
-            ))}
-          </Choices>
-        )}
-        <p className="jny-note">Tap one to put it back. Nothing is counted.</p>
-        <Cta onClick={onDone}>Continue</Cta>
-      </div>
-    );
-  }
+type TranscribeOk = { ok: true; text: string };
+type TranscribeErr = { ok: false; error: string };
+export type TranscribeResult = TranscribeOk | TranscribeErr;
 
-  const lean = !leaving && Math.abs(dx) > 24 ? (dx > 0 ? " lean-keep" : " lean-pass") : "";
+export const transcribeSermon = createServerFn({ method: "POST" })
+  .validator((input: { wav: string }) => {
+    const wav = typeof input?.wav === "string" ? input.wav : "";
+    return { wav };
+  })
+  .handler(async ({ data }): Promise<TranscribeResult> => {
+    const apiKey = process.env.XAI_API_KEY;
+    if (!apiKey) return { ok: false, error: "Hearing this back is not available here yet." };
+    if (data.wav.length < 800) return { ok: false, error: "Nothing was heard yet." };
+    if (data.wav.length > 16_000_000) return { ok: false, error: "Keep this sitting a little shorter." };
 
-  return (
-    <>
-      <div className="jny-tray" aria-live="polite">
-        {kept.length ? (
-          kept.map((p) => (
-            <span key={p.id} className="jny-pill">
-              {p.label.replace(/^I /, "")}
-            </span>
-          ))
-        ) : (
-          <span className="jny-tray-empty">Swipe right if this is you. Left to pass.</span>
-        )}
-      </div>
-      <div className="jny-deck">
-        <article
-          className={`jny-play-card${leaving === "keep" ? " keep" : leaving === "pass" ? " pass" : ""}${dx ? " drag" : ""}${lean}`}
-          key={current.id}
-          style={leaving ? undefined : { transform: `translateX(${dx}px) rotate(${dx / 28}deg)` }}
-          {...bind}
-        >
-          <small>
-            {i + 1} of {patterns.length}
-          </small>
-          <h2>{current.label}</h2>
-        </article>
-      </div>
-      <Dual primary="This is me" secondary="Pass" onPrimary={() => choose(true)} onSecondary={() => choose(false)} />
-      <button type="button" className="jny-text-link" onClick={onDone}>
-        Continue with these
-      </button>
-    </>
-  );
-}
+    let bytes: Uint8Array;
+    try {
+      bytes = Uint8Array.from(atob(data.wav), (c) => c.charCodeAt(0));
+    } catch {
+      return { ok: false, error: "The recording could not be read." };
+    }
 
-export function SortBoard({
-  items,
-  buckets,
-  sorted,
-  index,
-  onSort,
-}: {
-  items: Pattern[];
-  buckets: { id: string; label: string }[];
-  sorted: Record<string, string>;
-  index: number;
-  onSort: (id: string, bucket: string) => void;
-}) {
-  const item = items[index];
-  if (!item) return <p className="jny-body">Nothing was tapped. You can go back, or continue.</p>;
-  const chosen = sorted[item.id];
-  return (
-    <div className="jny-scroll">
-      <article className="jny-play-card compact">
-        <small>
-          {index + 1} of {items.length}
-        </small>
-        <h2>{item.label}</h2>
-      </article>
-      <Choices>
-        {buckets.map((b) => (
-          <Choice key={b.id} title={b.label} on={chosen === b.id} onClick={() => onSort(item.id, b.id)} />
-        ))}
-      </Choices>
-    </div>
-  );
-}
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(bytes);
+    const form = new FormData();
+    form.append("file", new Blob([copy], { type: "audio/wav" }), "sitting.wav");
+    form.append("language", "en");
+    form.append("format", "true");
 
-export function FlipCard({ pattern, flipped, onFlip }: { pattern: Pattern; flipped: boolean; onFlip: () => void }) {
-  return (
-    <button type="button" className={`jny-flip${flipped ? " on" : ""}`} onClick={onFlip} aria-label="Turn the card">
-      <span className="jny-flip-inner">
-        <span className="jny-face">
-          <small>What it costs</small>
-          <strong>{pattern.label}</strong>
-          <p>{pattern.cost}</p>
-          <em>Tap to turn</em>
-        </span>
-        <span className="jny-face back">
-          <small>What it was for</small>
-          <strong>{pattern.label}</strong>
-          <p>{pattern.gift}</p>
-        </span>
-      </span>
-    </button>
-  );
-}
+    const res = await fetch("https://api.x.ai/v1/stt", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form,
+    });
+    if (!res.ok) return { ok: false, error: "The words could not be taken down just now." };
 
-export function CarryDeck({
-  items,
-  carrying,
-  onCarry,
-}: {
-  items: Pattern[];
-  carrying?: string;
-  onCarry: (id: string) => void;
-}) {
-  const [i, setI] = useState(0);
-  const current = items[i];
-  if (!current) return <p className="jny-body">Nothing was tapped. You can go back, or continue.</p>;
-  const on = carrying === current.id;
-
-  const { dx, bind } = useDrag((dir) => {
-    if (dir === "left") setI((n) => (n + 1) % items.length);
-    else setI((n) => (n - 1 + items.length) % items.length);
+    const body = (await res.json()) as { text?: unknown };
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    if (text.length < 8) return { ok: false, error: "Nothing clear enough to keep yet." };
+    return { ok: true, text: text.slice(0, 12000) };
   });
 
-  return (
-    <>
-      <article
-        className={`jny-play-card${on ? " keep" : ""}${dx ? " drag" : ""}`}
-        style={{ transform: `translateX(${dx}px)` }}
-        {...bind}
-      >
-        <small>
-          {i + 1} of {items.length}
-        </small>
-        <h2>{current.gift}</h2>
-      </article>
-      <Dual
-        primary={on ? "Carrying this" : "Carry this"}
-        secondary="Another"
-        onPrimary={() => onCarry(current.id)}
-        onSecondary={() => setI((n) => (n + 1) % items.length)}
-      />
-    </>
-  );
-}
-
-export function Openings({
-  openings,
-  onPick,
-}: {
-  openings: string[];
-  onPick: (opening: string) => void;
-}) {
-  return (
-    <Choices>
-      {openings.map((o, i) => (
-        <Choice key={o} kicker={String(i + 1).padStart(2, "0")} title={o} onClick={() => onPick(o)} />
-      ))}
-    </Choices>
-  );
-}
-
-export function VerseCard({ verse, children }: { verse: Verse; children?: ReactNode }) {
-  return (
-    <blockquote className="jny-verse">
-      <p>“{verse.text}”</p>
-      <cite>{verse.reference}</cite>
-      {children}
-    </blockquote>
-  );
-}
-
-export function WordVerse({ verse }: { verse: Verse }) {
-  const [lit, setLit] = useState<Set<number>>(() => new Set());
-  const words = verse.text.split(/\s+/);
-
-  useEffect(() => {
-    setLit(new Set());
-  }, [verse.text, verse.reference]);
-
-  return (
-    <blockquote className="jny-verse living">
-      <p>
-        {words.map((word, i) => (
-          <button
-            key={`${word}-${i}`}
-            type="button"
-            className={`jny-word${lit.has(i) ? " on" : ""}`}
-            onClick={() => {
-              tap();
-              setLit((s) => {
-                const next = new Set(s);
-                if (next.has(i)) next.delete(i);
-                else next.add(i);
-                return next;
-              });
-            }}
-          >
-            {word}
-          </button>
-        ))}
-      </p>
-      <cite>{verse.reference}</cite>
-      <em>Tap a word to keep it lit.</em>
-    </blockquote>
-  );
-}
-
-export function ReadReveal({ station }: { station: Station }) {
-  const [open, setOpen] = useState(0);
-  const bits = [station.body, station.reading].filter(Boolean) as string[];
-  return (
-    <div className="jny-scroll">
-      {bits.slice(0, Math.max(1, open + 1)).map((b, i) => (
-        <p key={i} className={i === 0 ? "jny-body" : "jny-reading"}>
-          {b}
-        </p>
-      ))}
-      {open < bits.length - 1 ? (
-        <button type="button" className="jny-text-link" onClick={() => setOpen((n) => n + 1)}>
-          Stay with this
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-
-========================================================================
-FILE: src/journey/rooms.tsx
-BYTES: 22561
-LINES: 707
-========================================================================
+===== FILE: src/journey/rooms.tsx =====
 
 "use client";
 
@@ -1007,6 +636,7 @@ import { Back, Choice, Choices, Cta, Reveal, Sheet, tap, useDrag, useImmersive }
 import { Dual } from "./play";
 import { FOCUS_KINDS, TONES, useJourney, type FocusKind, type JournalTone } from "./store";
 import { splitSermon } from "./sermon";
+import { ListenSurface } from "./listen";
 
 const OPENINGS = ["I am carrying", "I noticed", "I am grateful", "I cannot name it yet"];
 
@@ -1482,6 +1112,15 @@ export function NotesRoom() {
     setMode("home");
   };
 
+  const openDeck = (nextTitle: string, nextBody: string, nextPoints: string[]) => {
+    setTitle(nextTitle);
+    setBody(nextBody);
+    setPoints(nextPoints.map((text) => ({ text, keep: true })));
+    setPi(0);
+    setMode("deck");
+    tap();
+  };
+
   const keepPoints = async () => {
     setBusy(true);
     setError("");
@@ -1492,6 +1131,7 @@ export function NotesRoom() {
         setBusy(false);
         return;
       }
+      setTitle((t) => t.trim() || result.title);
       setPoints(result.points.map((text) => ({ text, keep: true })));
       setPi(0);
       setMode("deck");
@@ -1663,57 +1303,364 @@ export function NotesRoom() {
   }
 
   return (
+    <ListenSurface
+      onBack={() => setRoom("hub")}
+      onBroken={openDeck}
+      onWrite={() => setMode("write")}
+      onPaste={() => setMode("split")}
+      kept={notes.map((n) => ({
+        id: n.id,
+        title: n.title,
+        at: n.at,
+        onOpen: () => {
+          tap();
+          setOpenId(n.id);
+          setMode("page");
+        },
+      }))}
+    />
+  );
+}
+
+===== FILE: src/journey/hub.tsx =====
+
+"use client";
+
+import { useEffect, useMemo, useRef } from "react";
+import gsap from "gsap";
+import { PATHS } from "./paths";
+import { Back, Choice, Choices, Stage, tap, useImmersive } from "./chrome";
+import { useJourney, type Room } from "./store";
+
+const ROOMS: { id: Room; n: string; title: string; name: string; line: string; art: string }[] = [
+  { id: "paths", n: "01", title: "PATHS", name: "Paths", line: "Four walks", art: "ticks" },
+  { id: "journal", n: "02", title: "JOURNAL", name: "Journal", line: "What is true", art: "rules" },
+  { id: "focus", n: "03", title: "FOCUS", name: "Focus", line: "One thing", art: "dot" },
+  { id: "breath", n: "04", title: "BREATH", name: "Breath", line: "Still", art: "orb" },
+  { id: "notes", n: "05", title: "NOTES", name: "Notes", line: "Listen to what is said", art: "quote" },
+];
+
+function TileArt({ art }: { art: string }) {
+  if (art === "ticks") return <span className="jny-art ticks" aria-hidden="true" />;
+  if (art === "rules") return <span className="jny-art rules" aria-hidden="true" />;
+  if (art === "dot") return <span className="jny-art dot" aria-hidden="true" />;
+  if (art === "orb") return <span className="jny-art orb" aria-hidden="true" />;
+  return (
+    <span className="jny-art quote" aria-hidden="true">
+      “
+    </span>
+  );
+}
+
+function useResume() {
+  const progress = useJourney((s) => s.progress);
+  return useMemo(() => {
+    for (const p of PATHS) {
+      const at = progress[p.id];
+      if (!at) continue;
+      if ((at.station ?? 0) > 0 || (at.tapped?.length ?? 0) > 0) {
+        return { path: p, at };
+      }
+    }
+    return null;
+  }, [progress]);
+}
+
+export function Hub() {
+  const setRoom = useJourney((s) => s.setRoom);
+  const grid = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = grid.current;
+    if (!el) return;
+    const tiles = el.querySelectorAll(".jny-tile");
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) return;
+    gsap.fromTo(
+      tiles,
+      { opacity: 0, y: 16, filter: "blur(8px)" },
+      { opacity: 1, y: 0, filter: "blur(0px)", duration: 0.55, stagger: 0.06, ease: "power3.out" },
+    );
+  }, []);
+
+  return (
+    <Stage className="jny-hub">
+      <h1 className="jny-display">JOURNEY</h1>
+
+      <div className="jny-section">
+        <h2>Stay</h2>
+        <span>5 rooms</span>
+      </div>
+
+      <div className="jny-bible-grid" ref={grid}>
+        {ROOMS.map((r) => (
+          <button
+            key={r.id}
+            type="button"
+            className="jny-tile"
+            onClick={() => {
+              tap();
+              setRoom(r.id);
+            }}
+          >
+            <span className="jny-tile-face">
+              <span className="jny-tile-num">{r.n}</span>
+              <TileArt art={r.art} />
+              <span className="jny-tile-name">{r.title}</span>
+            </span>
+            <span className="jny-tile-meta">
+              <strong>{r.name}</strong>
+              <span>{r.line}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+    </Stage>
+  );
+}
+
+export function PathsRoom() {
+  const setRoom = useJourney((s) => s.setRoom);
+  const start = useJourney((s) => s.startWalk);
+  const progress = useJourney((s) => s.progress);
+  const resume = useResume();
+
+  useImmersive(true);
+
+  return (
     <div className="jny jny-full">
       <div className="jny-stage jny-threshold">
         <Back onClick={() => setRoom("hub")}>Back</Back>
-        <p className="jny-kicker">Notes</p>
-        <Reveal text="What stayed?" />
+        <p className="jny-kicker">Paths</p>
+        <h1 className="jny-title">Offered, never assigned.</h1>
+        <p className="jny-sub">Leave whenever you like. Come back to the same place.</p>
         <div className="jny-scroll">
-          <button type="button" className="jny-dest" onClick={() => setMode("write")}>
-            <small>Keep</small>
-            <h2>The line that stayed</h2>
-            <p>Who was speaking, and the sentence that would not leave.</p>
-          </button>
-          <button type="button" className="jny-dest" onClick={() => setMode("split")}>
-            <small>A sermon</small>
-            <h2>Break into points</h2>
-            <p>Paste what was said. Keep or pass each one.</p>
-          </button>
-          {notes.length ? (
-            <>
-              <div className="jny-section">
-                <h2>Kept</h2>
-                <span>{notes.length}</span>
-              </div>
-              {notes.map((n) => (
-                <button
-                  key={n.id}
-                  type="button"
-                  className="jny-kept-row"
-                  onClick={() => {
-                    tap();
-                    setOpenId(n.id);
-                    setMode("page");
-                  }}
-                >
-                  <time>{formatDay(n.at).rest}</time>
-                  <p>{n.title}</p>
-                </button>
-              ))}
-            </>
-          ) : null}
+          <Choices>
+            {resume ? (
+              <Choice
+                kicker="Continue"
+                title={resume.path.title}
+                line={
+                  resume.at.carrying
+                    ? "Carrying what it was for"
+                    : `Where you left off · ${resume.at.station + 1} of ${resume.path.stations.length}`
+                }
+                on
+                onClick={() => start(resume.path.id)}
+              />
+            ) : null}
+            {PATHS.map((p) => {
+              const at = progress[p.id];
+              const resumed = (at?.station ?? 0) > 0 || (at?.tapped?.length ?? 0) > 0;
+              const carried = p.patterns.find((x) => x.id === at?.carrying);
+              if (resume && p.id === resume.path.id) return null;
+              return (
+                <Choice
+                  key={p.id}
+                  kicker={carried ? "Carrying" : resumed ? "Return" : p.kicker}
+                  title={p.title}
+                  line={p.about}
+                  on={resumed}
+                  onClick={() => start(p.id)}
+                />
+              );
+            })}
+          </Choices>
         </div>
       </div>
     </div>
   );
 }
 
+===== FILE: src/journey/experience.tsx =====
 
-========================================================================
-FILE: src/journey/chrome.tsx
-BYTES: 5112
-LINES: 224
-========================================================================
+"use client";
+
+import { useEffect, useState } from "react";
+import "./journey.css";
+import { Onboarding } from "./onboarding";
+import { Hub, PathsRoom } from "./hub";
+import { Walk } from "./walk";
+import { BreathRoom, FocusRoom, JournalRoom, NotesRoom } from "./rooms";
+import { useJourney } from "./store";
+
+/** Preview only. Flip to false before launch so returning people go straight to the hub. */
+const PREVIEW_THRESHOLD_EVERY_VISIT = true;
+
+export function JourneyExperience() {
+  const [ready, setReady] = useState(false);
+  const [threshold, setThreshold] = useState(PREVIEW_THRESHOLD_EVERY_VISIT);
+  const onboarded = useJourney((s) => s.onboarded);
+  const room = useJourney((s) => s.room);
+  const walking = useJourney((s) => s.walking);
+
+  useEffect(() => setReady(true), []);
+  if (!ready) return <div className="jny" />;
+  if (threshold || !onboarded) {
+    return <Onboarding onDone={() => setThreshold(false)} />;
+  }
+  if (walking) return <Walk pathId={walking} />;
+  if (room === "paths") return <PathsRoom />;
+  if (room === "journal") return <JournalRoom />;
+  if (room === "focus") return <FocusRoom />;
+  if (room === "breath") return <BreathRoom />;
+  if (room === "notes") return <NotesRoom />;
+  return <Hub />;
+}
+
+===== FILE: src/journey/onboarding.tsx =====
+
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import gsap from "gsap";
+import { GlowCopy, type GlowLine } from "./glow";
+import { Cta, useImmersive } from "./chrome";
+import { useJourney } from "./store";
+
+const SCREENS: { lines: GlowLine[]; cta: string }[] = [
+  {
+    lines: [
+      { text: "Are you ready to", quiet: true },
+      { text: "start your journey?", glow: true, display: true },
+    ],
+    cta: "Yes, I am.",
+  },
+  {
+    lines: [
+      { text: "A spiritual journey is" },
+      { text: "a personal process of" },
+      { text: "self-discovery and inner growth", glow: true },
+      { text: "that moves beyond the physical ego" },
+      { text: "to explore deeper questions" },
+      { text: "about existence.", glow: true },
+    ],
+    cta: "Continue",
+  },
+  {
+    lines: [
+      { text: "Your journey", quiet: true },
+      { text: "begins here.", glow: true, display: true },
+    ],
+    cta: "Begin my journey",
+  },
+];
+
+export function Onboarding({ onDone }: { onDone?: () => void }) {
+  const finish = useJourney((s) => s.finishOnboard);
+  const [i, setI] = useState(0);
+  const ctaRef = useRef<HTMLDivElement>(null);
+  const screen = SCREENS[i];
+  useImmersive(true);
+
+  useEffect(() => {
+    const el = ctaRef.current;
+    if (!el) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) return;
+    gsap.fromTo(el, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.7, delay: 0.85, ease: "power3.out" });
+  }, [i]);
+
+  const next = () => {
+    if (i >= SCREENS.length - 1) {
+      finish();
+      onDone?.();
+    } else setI(i + 1);
+  };
+
+  return (
+    <div className="jny jny-full" role="region" aria-label="Begin the journey">
+      <div className="jny-stage jny-threshold">
+        <div className="jny-center" key={i}>
+          <GlowCopy lines={screen.lines} />
+        </div>
+        <div ref={ctaRef} className="jny-cta-slot">
+          <Cta hold onClick={next}>
+            {screen.cta}
+          </Cta>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+===== FILE: src/journey/glow.tsx =====
+
+"use client";
+
+import { useEffect, useRef } from "react";
+import gsap from "gsap";
+
+export type GlowLine = {
+  text: string;
+  glow?: boolean;
+  quiet?: boolean;
+  display?: boolean;
+};
+
+export function GlowCopy({ lines, align = "left" }: { lines: GlowLine[]; align?: "left" | "center" }) {
+  const root = useRef<HTMLParagraphElement>(null);
+
+  useEffect(() => {
+    const el = root.current;
+    if (!el) return;
+    const words = el.querySelectorAll<HTMLElement>("span[data-w]");
+    const lit = el.querySelectorAll<HTMLElement>("span.glow");
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) {
+      gsap.set(words, { opacity: 1, y: 0, filter: "none" });
+      return;
+    }
+    const ctx = gsap.context(() => {
+      gsap.fromTo(
+        words,
+        { opacity: 0, y: 14, filter: "blur(8px)" },
+        {
+          opacity: 1,
+          y: 0,
+          filter: "blur(0px)",
+          duration: 0.95,
+          stagger: 0.055,
+          ease: "power3.out",
+        },
+      );
+      if (lit.length) {
+        gsap.fromTo(
+          lit,
+          { textShadow: "0 0 0 rgba(255,255,255,0)" },
+          {
+            textShadow: "0 0 10px rgba(255,255,255,0.95), 0 0 28px rgba(255,255,255,0.7), 0 0 56px rgba(255,255,255,0.32)",
+            duration: 1.4,
+            delay: 0.45,
+            ease: "power2.out",
+          },
+        );
+      }
+    }, el);
+    return () => ctx.revert();
+  }, [lines]);
+
+  return (
+    <p ref={root} className={`jny-copy${align === "center" ? " center" : ""}`}>
+      {lines.map((line, i) => (
+        <span
+          key={i}
+          className={`jny-line${line.glow ? " glow-line" : ""}${line.quiet ? " quiet" : ""}${line.display ? " display" : ""}`}
+        >
+          {i > 0 ? <br /> : null}
+          {line.text.split(" ").map((word, j, arr) => (
+            <span key={j} data-w className={line.glow ? "glow" : undefined}>
+              {word}
+              {j < arr.length - 1 ? "\u00a0" : ""}
+            </span>
+          ))}
+        </span>
+      ))}
+    </p>
+  );
+}
+
+===== FILE: src/journey/chrome.tsx =====
 
 "use client";
 
@@ -1940,236 +1887,583 @@ export function Sheet({
   );
 }
 
+===== FILE: src/journey/play.tsx =====
 
-========================================================================
-FILE: src/journey/store.ts
-BYTES: 7303
-LINES: 216
-========================================================================
+"use client";
 
-import { create } from "zustand";
+import { useEffect, useState, type ReactNode } from "react";
+import type { Pattern, Station, Verse } from "./paths";
+import { Choice, Choices, Cta, tap, useDrag } from "./chrome";
 
-const KEY = "selah-journey-v3";
+export function Dual({
+  primary,
+  secondary,
+  onPrimary,
+  onSecondary,
+}: {
+  primary: string;
+  secondary: string;
+  onPrimary: () => void;
+  onSecondary: () => void;
+}) {
+  return (
+    <div className="jny-dual">
+      <button
+        type="button"
+        className="jny-cta"
+        onClick={() => {
+          tap();
+          onPrimary();
+        }}
+      >
+        {primary}
+      </button>
+      <button
+        type="button"
+        className="jny-cta ghost"
+        onClick={() => {
+          tap();
+          onSecondary();
+        }}
+      >
+        {secondary}
+      </button>
+    </div>
+  );
+}
 
-export type Room = "hub" | "paths" | "journal" | "focus" | "breath" | "notes";
-
-export type FocusKind = "scripture" | "intercession" | "creation" | "question";
-
-export type JournalTone = "still" | "warm" | "dawn" | "garden";
-
-export const FOCUS_KINDS: { id: FocusKind; label: string; title: string; line: string }[] = [
-  { id: "scripture", label: "a passage", title: "Passage", line: "A verse to stay with" },
-  { id: "intercession", label: "someone I am holding", title: "Someone", line: "A person in front of you" },
-  { id: "creation", label: "something in creation", title: "Creation", line: "A thing God made" },
-  { id: "question", label: "a question I am carrying", title: "Question", line: "Something unfinished" },
-];
-
-export const TONES: { id: JournalTone; label: string }[] = [
-  { id: "still", label: "Still" },
-  { id: "warm", label: "Warm" },
-  { id: "dawn", label: "Dawn" },
-  { id: "garden", label: "Garden" },
-];
-
-export type PathProgress = {
-  station: number;
+export function PatternDeck({
+  patterns,
+  tapped,
+  onToggle,
+  onDone,
+}: {
+  patterns: Pattern[];
   tapped: string[];
-  chosen?: string;
-  origin?: string;
-  letter?: string;
-  sorted?: Record<string, string>;
-  carrying?: string;
-};
+  onToggle: (id: string) => void;
+  onDone: () => void;
+}) {
+  const [i, setI] = useState(0);
+  const [leaving, setLeaving] = useState<"keep" | "pass" | null>(null);
+  const done = i >= patterns.length;
+  const current = patterns[i];
+  const kept = patterns.filter((p) => tapped.includes(p.id));
 
-export type JournalEntry = { id: string; at: number; text: string; tone: JournalTone };
-export type NoteEntry = { id: string; at: number; title: string; body: string; points?: string[] };
+  useEffect(() => {
+    setI(0);
+  }, [patterns]);
 
-type Saved = {
-  onboarded: boolean;
-  focus?: string;
-  focusKind?: FocusKind;
-  journal: JournalEntry[];
-  notes: NoteEntry[];
-  progress: Record<string, PathProgress>;
-};
-
-function emptySaved(): Saved {
-  return { onboarded: false, journal: [], notes: [], progress: {} };
-}
-
-function load(): Saved {
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return emptySaved();
-    const p = JSON.parse(raw) as Saved;
-    const progress: Record<string, PathProgress> = {};
-    if (p.progress && typeof p.progress === "object") {
-      for (const [id, value] of Object.entries(p.progress)) {
-        if (!value || typeof value !== "object") continue;
-        progress[id] = {
-          station: Number(value.station) || 0,
-          tapped: Array.isArray(value.tapped) ? value.tapped.map(String) : [],
-          chosen: value.chosen,
-          origin: value.origin,
-          letter: value.letter,
-          sorted: value.sorted && typeof value.sorted === "object" ? value.sorted : undefined,
-          carrying: value.carrying,
-        };
-      }
+  const choose = (keep: boolean) => {
+    if (!current || leaving) return;
+    if (keep && !tapped.includes(current.id)) onToggle(current.id);
+    if (!keep && tapped.includes(current.id)) onToggle(current.id);
+    try {
+      navigator.vibrate?.(keep ? 12 : 6);
+    } catch {
+      /* no haptic */
     }
-    return {
-      onboarded: Boolean(p.onboarded),
-      focus: typeof p.focus === "string" ? p.focus : undefined,
-      focusKind: p.focusKind,
-      journal: Array.isArray(p.journal)
-        ? p.journal.map((e) => ({
-            id: String(e.id),
-            at: Number(e.at) || Date.now(),
-            text: String(e.text ?? ""),
-            tone: (e.tone as JournalTone) || "still",
-          }))
-        : [],
-      notes: Array.isArray(p.notes) ? p.notes : [],
-      progress,
-    };
-  } catch {
-    return emptySaved();
+    setLeaving(keep ? "keep" : "pass");
+    window.setTimeout(() => {
+      setLeaving(null);
+      setI((n) => n + 1);
+    }, 280);
+  };
+
+  const { dx, bind } = useDrag((dir) => {
+    if (dir === "right") choose(true);
+    else choose(false);
+  });
+
+  if (done) {
+    return (
+      <div className="jny-scroll">
+        <p className="jny-kicker">Kept</p>
+        <h1 className="jny-title">Here is what sounded like you</h1>
+        {kept.length === 0 ? (
+          <p className="jny-body">Nothing was kept. That is allowed. You can go back, or continue.</p>
+        ) : (
+          <Choices>
+            {kept.map((p, n) => (
+              <Choice
+                key={p.id}
+                kicker={String(n + 1).padStart(2, "0")}
+                title={p.label}
+                on
+                onClick={() => onToggle(p.id)}
+              />
+            ))}
+          </Choices>
+        )}
+        <p className="jny-note">Tap one to put it back. Nothing is counted.</p>
+        <Cta onClick={onDone}>Continue</Cta>
+      </div>
+    );
   }
+
+  const lean = !leaving && Math.abs(dx) > 24 ? (dx > 0 ? " lean-keep" : " lean-pass") : "";
+
+  return (
+    <>
+      <div className="jny-tray" aria-live="polite">
+        {kept.length ? (
+          kept.map((p) => (
+            <span key={p.id} className="jny-pill">
+              {p.label.replace(/^I /, "")}
+            </span>
+          ))
+        ) : (
+          <span className="jny-tray-empty">Swipe right if this is you. Left to pass.</span>
+        )}
+      </div>
+      <div className="jny-deck">
+        <article
+          className={`jny-play-card${leaving === "keep" ? " keep" : leaving === "pass" ? " pass" : ""}${dx ? " drag" : ""}${lean}`}
+          key={current.id}
+          style={leaving ? undefined : { transform: `translateX(${dx}px) rotate(${dx / 28}deg)` }}
+          {...bind}
+        >
+          <small>
+            {i + 1} of {patterns.length}
+          </small>
+          <h2>{current.label}</h2>
+        </article>
+      </div>
+      <Dual primary="This is me" secondary="Pass" onPrimary={() => choose(true)} onSecondary={() => choose(false)} />
+      <button type="button" className="jny-text-link" onClick={onDone}>
+        Continue with these
+      </button>
+    </>
+  );
 }
 
-function snapshot(s: Saved): Saved {
-  return {
-    onboarded: s.onboarded,
-    focus: s.focus,
-    focusKind: s.focusKind,
-    journal: s.journal,
-    notes: s.notes,
-    progress: s.progress,
+export function SortBoard({
+  items,
+  buckets,
+  sorted,
+  index,
+  onSort,
+}: {
+  items: Pattern[];
+  buckets: { id: string; label: string }[];
+  sorted: Record<string, string>;
+  index: number;
+  onSort: (id: string, bucket: string) => void;
+}) {
+  const item = items[index];
+  if (!item) return <p className="jny-body">Nothing was tapped. You can go back, or continue.</p>;
+  const chosen = sorted[item.id];
+  return (
+    <div className="jny-scroll">
+      <article className="jny-play-card compact">
+        <small>
+          {index + 1} of {items.length}
+        </small>
+        <h2>{item.label}</h2>
+      </article>
+      <Choices>
+        {buckets.map((b) => (
+          <Choice key={b.id} title={b.label} on={chosen === b.id} onClick={() => onSort(item.id, b.id)} />
+        ))}
+      </Choices>
+    </div>
+  );
+}
+
+export function FlipCard({ pattern, flipped, onFlip }: { pattern: Pattern; flipped: boolean; onFlip: () => void }) {
+  return (
+    <button type="button" className={`jny-flip${flipped ? " on" : ""}`} onClick={onFlip} aria-label="Turn the card">
+      <span className="jny-flip-inner">
+        <span className="jny-face">
+          <small>What it costs</small>
+          <strong>{pattern.label}</strong>
+          <p>{pattern.cost}</p>
+          <em>Tap to turn</em>
+        </span>
+        <span className="jny-face back">
+          <small>What it was for</small>
+          <strong>{pattern.label}</strong>
+          <p>{pattern.gift}</p>
+        </span>
+      </span>
+    </button>
+  );
+}
+
+export function CarryDeck({
+  items,
+  carrying,
+  onCarry,
+}: {
+  items: Pattern[];
+  carrying?: string;
+  onCarry: (id: string) => void;
+}) {
+  const [i, setI] = useState(0);
+  const current = items[i];
+  if (!current) return <p className="jny-body">Nothing was tapped. You can go back, or continue.</p>;
+  const on = carrying === current.id;
+
+  const { dx, bind } = useDrag((dir) => {
+    if (dir === "left") setI((n) => (n + 1) % items.length);
+    else setI((n) => (n - 1 + items.length) % items.length);
+  });
+
+  return (
+    <>
+      <article
+        className={`jny-play-card${on ? " keep" : ""}${dx ? " drag" : ""}`}
+        style={{ transform: `translateX(${dx}px)` }}
+        {...bind}
+      >
+        <small>
+          {i + 1} of {items.length}
+        </small>
+        <h2>{current.gift}</h2>
+      </article>
+      <Dual
+        primary={on ? "Carrying this" : "Carry this"}
+        secondary="Another"
+        onPrimary={() => onCarry(current.id)}
+        onSecondary={() => setI((n) => (n + 1) % items.length)}
+      />
+    </>
+  );
+}
+
+export function Openings({
+  openings,
+  onPick,
+}: {
+  openings: string[];
+  onPick: (opening: string) => void;
+}) {
+  return (
+    <Choices>
+      {openings.map((o, i) => (
+        <Choice key={o} kicker={String(i + 1).padStart(2, "0")} title={o} onClick={() => onPick(o)} />
+      ))}
+    </Choices>
+  );
+}
+
+export function VerseCard({ verse, children }: { verse: Verse; children?: ReactNode }) {
+  return (
+    <blockquote className="jny-verse">
+      <p>“{verse.text}”</p>
+      <cite>{verse.reference}</cite>
+      {children}
+    </blockquote>
+  );
+}
+
+export function WordVerse({ verse }: { verse: Verse }) {
+  const [lit, setLit] = useState<Set<number>>(() => new Set());
+  const words = verse.text.split(/\s+/);
+
+  useEffect(() => {
+    setLit(new Set());
+  }, [verse.text, verse.reference]);
+
+  return (
+    <blockquote className="jny-verse living">
+      <p>
+        {words.map((word, i) => (
+          <button
+            key={`${word}-${i}`}
+            type="button"
+            className={`jny-word${lit.has(i) ? " on" : ""}`}
+            onClick={() => {
+              tap();
+              setLit((s) => {
+                const next = new Set(s);
+                if (next.has(i)) next.delete(i);
+                else next.add(i);
+                return next;
+              });
+            }}
+          >
+            {word}
+          </button>
+        ))}
+      </p>
+      <cite>{verse.reference}</cite>
+      <em>Tap a word to keep it lit.</em>
+    </blockquote>
+  );
+}
+
+export function ReadReveal({ station }: { station: Station }) {
+  const [open, setOpen] = useState(0);
+  const bits = [station.body, station.reading].filter(Boolean) as string[];
+  return (
+    <div className="jny-scroll">
+      {bits.slice(0, Math.max(1, open + 1)).map((b, i) => (
+        <p key={i} className={i === 0 ? "jny-body" : "jny-reading"}>
+          {b}
+        </p>
+      ))}
+      {open < bits.length - 1 ? (
+        <button type="button" className="jny-text-link" onClick={() => setOpen((n) => n + 1)}>
+          Stay with this
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+===== FILE: src/journey/walk.tsx =====
+
+"use client";
+
+import { useEffect, useState } from "react";
+import { pathById, type Station } from "./paths";
+import { Back, Cta, Kicker, Reveal, tap, useImmersive } from "./chrome";
+import { useJourney } from "./store";
+import {
+  CarryDeck,
+  FlipCard,
+  Openings,
+  PatternDeck,
+  ReadReveal,
+  SortBoard,
+  WordVerse,
+} from "./play";
+
+export function Walk({ pathId }: { pathId: string }) {
+  const path = pathById(pathId);
+  const leave = useJourney((s) => s.leaveWalk);
+  const patch = useJourney((s) => s.patchProgress);
+  const saved = useJourney((s) => s.progress[pathId]);
+  const stationI = saved?.station ?? 0;
+  const tapped = saved?.tapped ?? [];
+  const sorted = saved?.sorted ?? {};
+  const letter = saved?.letter ?? "";
+  const origin = saved?.origin ?? "";
+  const carrying = saved?.carrying;
+  const [piece, setPiece] = useState(0);
+  const [why, setWhy] = useState(false);
+  const [flipped, setFlipped] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  useImmersive(true);
+
+  useEffect(() => {
+    setPiece(0);
+    setWhy(false);
+    setFlipped(false);
+    const station = path?.stations[Math.min(stationI, (path?.stations.length ?? 1) - 1)];
+    if (station?.kind === "letter") setDraft(letter);
+    else if (station?.kind === "write") setDraft(origin);
+    else setDraft("");
+  }, [stationI, pathId, path, letter, origin]);
+
+  if (!path) return null;
+
+  const station = path.stations[Math.min(stationI, path.stations.length - 1)];
+  const last = stationI >= path.stations.length - 1;
+  const chosen = path.patterns.filter((p) => tapped.includes(p.id));
+  const verses = station.scriptures ?? (station.scripture ? [station.scripture] : []);
+  const sortItems = chosen;
+  const mirrorItems = chosen;
+  const ownCta = station.kind !== "patterns";
+
+  const innerLast = (() => {
+    if (station.kind === "sort" && sortItems.length) return piece >= sortItems.length - 1;
+    if (station.kind === "mirror" && mirrorItems.length) return piece >= mirrorItems.length - 1;
+    if (station.kind === "scripture" && verses.length) return piece >= verses.length - 1;
+    return true;
+  })();
+
+  const go = (delta: number) => {
+    const n = Math.max(0, Math.min(path.stations.length - 1, stationI + delta));
+    if (station.kind === "write") patch(pathId, { origin: draft, station: n });
+    else if (station.kind === "letter") patch(pathId, { letter: draft, station: n });
+    else patch(pathId, { station: n });
   };
-}
 
-function persist(s: Saved) {
-  localStorage.setItem(KEY, JSON.stringify(snapshot(s)));
-}
-
-type State = Saved & {
-  room: Room;
-  walking: string | null;
-  setRoom: (r: Room) => void;
-  finishOnboard: () => void;
-  startWalk: (id: string) => void;
-  leaveWalk: () => void;
-  patchProgress: (id: string, patch: Partial<PathProgress>) => void;
-  setFocus: (v: string, kind?: FocusKind) => void;
-  addJournal: (text: string, tone: JournalTone) => void;
-  removeJournal: (id: string) => void;
-  addNote: (title: string, body: string, points?: string[]) => void;
-  removeNote: (id: string) => void;
-  exportKept: () => string;
-  eraseKept: () => void;
-};
-
-const emptyProgress = (): PathProgress => ({ station: 0, tapped: [] });
-
-export const useJourney = create<State>((set, get) => {
-  const saved = typeof window === "undefined" ? emptySaved() : load();
-  return {
-    ...saved,
-    room: "hub",
-    walking: null,
-    setRoom: (room) => set({ room, walking: null }),
-    finishOnboard: () => {
-      persist({ ...get(), onboarded: true });
-      set({ onboarded: true, room: "hub" });
-    },
-    startWalk: (id) => {
-      const progress = { ...get().progress };
-      if (!progress[id]) progress[id] = emptyProgress();
-      persist({ ...get(), progress });
-      set({ walking: id, progress, room: "paths" });
-    },
-    leaveWalk: () => set({ walking: null, room: "paths" }),
-    patchProgress: (id, patch) => {
-      const cur = get().progress[id] ?? emptyProgress();
-      const next: PathProgress = {
-        station: patch.station ?? cur.station,
-        tapped: patch.tapped ?? cur.tapped,
-        chosen: patch.chosen ?? cur.chosen,
-        origin: patch.origin ?? cur.origin,
-        letter: patch.letter ?? cur.letter,
-        sorted: patch.sorted ?? cur.sorted,
-        carrying: patch.carrying ?? cur.carrying,
-      };
-      const progress = { ...get().progress, [id]: next };
-      persist({ ...get(), progress });
-      set({ progress });
-    },
-    setFocus: (focus, focusKind) => {
-      persist({ ...get(), focus, focusKind: focusKind ?? get().focusKind });
-      set({ focus, focusKind: focusKind ?? get().focusKind });
-    },
-    addJournal: (text, tone) => {
-      const journal = [{ id: crypto.randomUUID(), at: Date.now(), text, tone }, ...get().journal];
-      persist({ ...get(), journal });
-      set({ journal });
-    },
-    removeJournal: (id) => {
-      const journal = get().journal.filter((e) => e.id !== id);
-      persist({ ...get(), journal });
-      set({ journal });
-    },
-    addNote: (title, body, points) => {
-      const notes = [{ id: crypto.randomUUID(), at: Date.now(), title, body, points }, ...get().notes];
-      persist({ ...get(), notes });
-      set({ notes });
-    },
-    removeNote: (id) => {
-      const notes = get().notes.filter((n) => n.id !== id);
-      persist({ ...get(), notes });
-      set({ notes });
-    },
-    exportKept: () => {
-      const s = snapshot(get());
-      const lines: string[] = ["Selah · Journey", "Kept on this device.", ""];
-      if (s.focus) {
-        const kind = FOCUS_KINDS.find((k) => k.id === s.focusKind)?.label;
-        lines.push("Focus", kind ? `${s.focus} · ${kind}` : s.focus, "");
-      }
-      if (s.journal.length) {
-        lines.push("Journal");
-        for (const e of s.journal) {
-          lines.push(new Date(e.at).toISOString().slice(0, 10));
-          lines.push(e.text, "");
-        }
-      }
-      if (s.notes.length) {
-        lines.push("Notes");
-        for (const n of s.notes) {
-          lines.push(n.title);
-          lines.push(n.body, "");
-        }
-      }
-      for (const [id, p] of Object.entries(s.progress)) {
-        if (p.origin) lines.push(`Origin · ${id}`, p.origin, "");
-        if (p.letter) lines.push(`Letter · ${id}`, p.letter, "");
-      }
-      lines.push("", "```json", JSON.stringify(s, null, 2), "```");
-      return lines.join("\n");
-    },
-    eraseKept: () => {
-      const next: Saved = { onboarded: get().onboarded, journal: [], notes: [], progress: {} };
-      persist(next);
-      set({ ...next, focus: undefined, focusKind: undefined, walking: null, room: "hub" });
-    },
+  const advance = () => {
+    tap();
+    if (!innerLast) {
+      setPiece((p) => p + 1);
+      setWhy(false);
+      setFlipped(false);
+      return;
+    }
+    if (last) leave();
+    else go(1);
   };
-});
 
+  const retreat = () => {
+    if (piece > 0) {
+      setPiece((p) => p - 1);
+      setWhy(false);
+      setFlipped(false);
+      return;
+    }
+    if (stationI > 0) go(-1);
+  };
 
-========================================================================
-FILE: src/journey/paths.ts
-BYTES: 31213
-LINES: 812
-========================================================================
+  const toggle = (id: string) => {
+    const next = tapped.includes(id) ? tapped.filter((x) => x !== id) : [...tapped, id];
+    patch(pathId, { tapped: next });
+  };
+
+  const verse = verses[Math.min(piece, Math.max(verses.length - 1, 0))];
+  const notes = station.notes ?? [];
+
+  return (
+    <div className="jny jny-full">
+      <div className="jny-stage jny-threshold">
+        <div className="jny-top">
+          <Back onClick={leave}>Leave</Back>
+          <span className="jny-count">
+            {stationI + 1} of {path.stations.length}
+          </span>
+        </div>
+        <div className="jny-thread" aria-hidden="true">
+          {path.stations.map((s, i) => (
+            <i key={s.id} className={i <= stationI ? "on" : undefined} />
+          ))}
+        </div>
+        <Kicker>{station.kicker}</Kicker>
+        <Reveal text={station.title} />
+
+        {station.kind === "read" && <ReadReveal station={station} />}
+
+        {station.kind === "patterns" && (
+          <PatternDeck patterns={path.patterns} tapped={tapped} onToggle={toggle} onDone={advance} />
+        )}
+
+        {(station.kind === "write" || station.kind === "letter") && (
+          <WriteStation station={station} draft={draft} setDraft={setDraft} />
+        )}
+
+        {station.kind === "sort" && (
+          <SortBoard
+            items={sortItems}
+            buckets={station.buckets ?? []}
+            sorted={sorted}
+            index={piece}
+            onSort={(id, bucket) => {
+              patch(pathId, { sorted: { ...sorted, [id]: bucket } });
+              if (piece < sortItems.length - 1) {
+                window.setTimeout(() => {
+                  setPiece((p) => p + 1);
+                }, 280);
+              }
+            }}
+          />
+        )}
+
+        {station.kind === "scripture" && verse && (
+          <div className="jny-scroll">
+            {station.body ? <p className="jny-body">{station.body}</p> : null}
+            <WordVerse verse={verse} />
+            {station.reading ? <p className="jny-reading">{station.reading}</p> : null}
+            {notes.length > 0 && (
+              <button type="button" className="jny-why" onClick={() => setWhy((v) => !v)}>
+                {why ? "Hide this" : "Why this is here"}
+              </button>
+            )}
+            {why &&
+              notes.map((n) => (
+                <div key={n.source} className="jny-sheet-card">
+                  <p>{n.text}</p>
+                  <p className="jny-caveat">{n.source}</p>
+                  <p className="jny-caveat">{n.caveat}</p>
+                </div>
+              ))}
+          </div>
+        )}
+
+        {station.kind === "mirror" && (
+          <div className="jny-scroll">
+            {station.body ? <p className="jny-body">{station.body}</p> : null}
+            {mirrorItems.length ? (
+              <FlipCard
+                pattern={mirrorItems[Math.min(piece, mirrorItems.length - 1)]}
+                flipped={flipped}
+                onFlip={() => {
+                  tap();
+                  setFlipped((v) => !v);
+                }}
+              />
+            ) : (
+              <p className="jny-body">Nothing was tapped. You can go back, or continue.</p>
+            )}
+            {station.reading ? <p className="jny-reading">{station.reading}</p> : null}
+          </div>
+        )}
+
+        {station.kind === "carry" && (
+          <div className="jny-scroll">
+            {station.body ? <p className="jny-body">{station.body}</p> : null}
+            <CarryDeck
+              items={chosen.length ? chosen : path.patterns}
+              carrying={carrying}
+              onCarry={(id) => patch(pathId, { carrying: id })}
+            />
+            {station.scripture ? <WordVerse verse={station.scripture} /> : null}
+            {station.reading ? <p className="jny-reading">{station.reading}</p> : null}
+            {station.note ? <p className="jny-note">{station.note}</p> : null}
+          </div>
+        )}
+
+        {ownCta ? (
+          <div className="jny-nav">
+            {stationI > 0 || piece > 0 ? <Back onClick={retreat}>Back</Back> : null}
+            <Cta onClick={advance}>{last && innerLast ? "Return" : "Continue"}</Cta>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function WriteStation({
+  station,
+  draft,
+  setDraft,
+}: {
+  station: Station;
+  draft: string;
+  setDraft: (v: string) => void;
+}) {
+  const [paper, setPaper] = useState(Boolean(draft.trim()));
+  useEffect(() => {
+    setPaper(Boolean(draft.trim()));
+  }, [station.id]);
+
+  return (
+    <div className="jny-scroll">
+      {station.body ? <p className="jny-body">{station.body}</p> : null}
+      {station.prompt ? <p className="jny-body">{station.prompt}</p> : null}
+      {!paper && station.openings ? (
+        <Openings
+          openings={station.openings}
+          onPick={(o) => {
+            setDraft(`${o} `);
+            setPaper(true);
+          }}
+        />
+      ) : (
+        <textarea
+          className="jny-paper"
+          value={draft}
+          placeholder={station.placeholder || "Begin here."}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+      )}
+      {!paper && station.openings ? (
+        <button type="button" className="jny-text-link" onClick={() => setPaper(true)}>
+          Write without an opening
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+===== FILE: src/journey/paths.ts =====
 
 export type Pattern = { id: string; label: string; cost: string; gift: string };
 
@@ -2984,78 +3278,226 @@ export function pathById(id: string) {
   return PATHS.find((p) => p.id === id);
 }
 
+===== FILE: src/journey/store.ts =====
 
-========================================================================
-FILE: src/journey/sermon.ts
-BYTES: 2478
-LINES: 58
-========================================================================
+import { create } from "zustand";
 
-import { createServerFn } from "@tanstack/react-start";
+const KEY = "selah-journey-v3";
 
-type SplitOk = { ok: true; points: string[] };
-type SplitErr = { ok: false; error: string };
-export type SplitResult = SplitOk | SplitErr;
+export type Room = "hub" | "paths" | "journal" | "focus" | "breath" | "notes";
 
-export const splitSermon = createServerFn({ method: "POST" })
-  .validator((input: { text: string }) => {
-    const text = typeof input?.text === "string" ? input.text.trim() : "";
-    return { text };
-  })
-  .handler(async ({ data }): Promise<SplitResult> => {
-    const text = data.text;
-    if (text.length < 40) return { ok: false, error: "A little more of the sermon is needed." };
-    if (text.length > 12000) return { ok: false, error: "Keep it to one sitting of notes." };
+export type FocusKind = "scripture" | "intercession" | "creation" | "question";
 
-    const apiKey = process.env.XAI_API_KEY;
-    if (!apiKey) return { ok: false, error: "Breaking a recording into points is not available here yet." };
+export type JournalTone = "still" | "warm" | "dawn" | "garden";
 
-    const res = await fetch("https://api.x.ai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "grok-4.5",
-        max_tokens: 900,
-        temperature: 0.2,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You extract the speaker's own points from a sermon or Christian podcast. Return JSON only: {\"points\":[\"...\"]}. 4 to 12 short points. Use the speaker's language. Do not add counsel, diagnosis, application, or verses they did not say. Do not moralise.",
-          },
-          { role: "user", content: text },
-        ],
-      }),
-    });
+export const FOCUS_KINDS: { id: FocusKind; label: string; title: string; line: string }[] = [
+  { id: "scripture", label: "a passage", title: "Passage", line: "A verse to stay with" },
+  { id: "intercession", label: "someone I am holding", title: "Someone", line: "A person in front of you" },
+  { id: "creation", label: "something in creation", title: "Creation", line: "A thing God made" },
+  { id: "question", label: "a question I am carrying", title: "Question", line: "Something unfinished" },
+];
 
-    if (!res.ok) return { ok: false, error: "The notes could not be broken up just now." };
+export const TONES: { id: JournalTone; label: string }[] = [
+  { id: "still", label: "Still" },
+  { id: "warm", label: "Warm" },
+  { id: "dawn", label: "Dawn" },
+  { id: "garden", label: "Garden" },
+];
 
-    const body = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    const raw = body.choices?.[0]?.message?.content ?? "";
-    const start = raw.indexOf("{");
-    const end = raw.lastIndexOf("}");
-    if (start < 0 || end <= start) return { ok: false, error: "Nothing clear enough to keep yet." };
-    try {
-      const parsed = JSON.parse(raw.slice(start, end + 1)) as { points?: unknown };
-      const points = Array.isArray(parsed.points)
-        ? parsed.points.map((p) => String(p).trim()).filter((p) => p.length > 0).slice(0, 12)
-        : [];
-      if (!points.length) return { ok: false, error: "Nothing clear enough to keep yet." };
-      return { ok: true, points };
-    } catch {
-      return { ok: false, error: "Nothing clear enough to keep yet." };
+export type PathProgress = {
+  station: number;
+  tapped: string[];
+  chosen?: string;
+  origin?: string;
+  letter?: string;
+  sorted?: Record<string, string>;
+  carrying?: string;
+};
+
+export type JournalEntry = { id: string; at: number; text: string; tone: JournalTone };
+export type NoteEntry = { id: string; at: number; title: string; body: string; points?: string[] };
+
+type Saved = {
+  onboarded: boolean;
+  focus?: string;
+  focusKind?: FocusKind;
+  journal: JournalEntry[];
+  notes: NoteEntry[];
+  progress: Record<string, PathProgress>;
+};
+
+function emptySaved(): Saved {
+  return { onboarded: false, journal: [], notes: [], progress: {} };
+}
+
+function load(): Saved {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return emptySaved();
+    const p = JSON.parse(raw) as Saved;
+    const progress: Record<string, PathProgress> = {};
+    if (p.progress && typeof p.progress === "object") {
+      for (const [id, value] of Object.entries(p.progress)) {
+        if (!value || typeof value !== "object") continue;
+        progress[id] = {
+          station: Number(value.station) || 0,
+          tapped: Array.isArray(value.tapped) ? value.tapped.map(String) : [],
+          chosen: value.chosen,
+          origin: value.origin,
+          letter: value.letter,
+          sorted: value.sorted && typeof value.sorted === "object" ? value.sorted : undefined,
+          carrying: value.carrying,
+        };
+      }
     }
-  });
+    return {
+      onboarded: Boolean(p.onboarded),
+      focus: typeof p.focus === "string" ? p.focus : undefined,
+      focusKind: p.focusKind,
+      journal: Array.isArray(p.journal)
+        ? p.journal.map((e) => ({
+            id: String(e.id),
+            at: Number(e.at) || Date.now(),
+            text: String(e.text ?? ""),
+            tone: (e.tone as JournalTone) || "still",
+          }))
+        : [],
+      notes: Array.isArray(p.notes) ? p.notes : [],
+      progress,
+    };
+  } catch {
+    return emptySaved();
+  }
+}
 
+function snapshot(s: Saved): Saved {
+  return {
+    onboarded: s.onboarded,
+    focus: s.focus,
+    focusKind: s.focusKind,
+    journal: s.journal,
+    notes: s.notes,
+    progress: s.progress,
+  };
+}
 
-========================================================================
-FILE: src/journey/journey.css
-BYTES: 26762
-LINES: 1330
-========================================================================
+function persist(s: Saved) {
+  localStorage.setItem(KEY, JSON.stringify(snapshot(s)));
+}
+
+type State = Saved & {
+  room: Room;
+  walking: string | null;
+  setRoom: (r: Room) => void;
+  finishOnboard: () => void;
+  startWalk: (id: string) => void;
+  leaveWalk: () => void;
+  patchProgress: (id: string, patch: Partial<PathProgress>) => void;
+  setFocus: (v: string, kind?: FocusKind) => void;
+  addJournal: (text: string, tone: JournalTone) => void;
+  removeJournal: (id: string) => void;
+  addNote: (title: string, body: string, points?: string[]) => void;
+  removeNote: (id: string) => void;
+  exportKept: () => string;
+  eraseKept: () => void;
+};
+
+const emptyProgress = (): PathProgress => ({ station: 0, tapped: [] });
+
+export const useJourney = create<State>((set, get) => {
+  const saved = typeof window === "undefined" ? emptySaved() : load();
+  return {
+    ...saved,
+    room: "hub",
+    walking: null,
+    setRoom: (room) => set({ room, walking: null }),
+    finishOnboard: () => {
+      persist({ ...get(), onboarded: true });
+      set({ onboarded: true, room: "hub" });
+    },
+    startWalk: (id) => {
+      const progress = { ...get().progress };
+      if (!progress[id]) progress[id] = emptyProgress();
+      persist({ ...get(), progress });
+      set({ walking: id, progress, room: "paths" });
+    },
+    leaveWalk: () => set({ walking: null, room: "paths" }),
+    patchProgress: (id, patch) => {
+      const cur = get().progress[id] ?? emptyProgress();
+      const next: PathProgress = {
+        station: patch.station ?? cur.station,
+        tapped: patch.tapped ?? cur.tapped,
+        chosen: patch.chosen ?? cur.chosen,
+        origin: patch.origin ?? cur.origin,
+        letter: patch.letter ?? cur.letter,
+        sorted: patch.sorted ?? cur.sorted,
+        carrying: patch.carrying ?? cur.carrying,
+      };
+      const progress = { ...get().progress, [id]: next };
+      persist({ ...get(), progress });
+      set({ progress });
+    },
+    setFocus: (focus, focusKind) => {
+      persist({ ...get(), focus, focusKind: focusKind ?? get().focusKind });
+      set({ focus, focusKind: focusKind ?? get().focusKind });
+    },
+    addJournal: (text, tone) => {
+      const journal = [{ id: crypto.randomUUID(), at: Date.now(), text, tone }, ...get().journal];
+      persist({ ...get(), journal });
+      set({ journal });
+    },
+    removeJournal: (id) => {
+      const journal = get().journal.filter((e) => e.id !== id);
+      persist({ ...get(), journal });
+      set({ journal });
+    },
+    addNote: (title, body, points) => {
+      const notes = [{ id: crypto.randomUUID(), at: Date.now(), title, body, points }, ...get().notes];
+      persist({ ...get(), notes });
+      set({ notes });
+    },
+    removeNote: (id) => {
+      const notes = get().notes.filter((n) => n.id !== id);
+      persist({ ...get(), notes });
+      set({ notes });
+    },
+    exportKept: () => {
+      const s = snapshot(get());
+      const lines: string[] = ["Selah · Journey", "Kept on this device.", ""];
+      if (s.focus) {
+        const kind = FOCUS_KINDS.find((k) => k.id === s.focusKind)?.label;
+        lines.push("Focus", kind ? `${s.focus} · ${kind}` : s.focus, "");
+      }
+      if (s.journal.length) {
+        lines.push("Journal");
+        for (const e of s.journal) {
+          lines.push(new Date(e.at).toISOString().slice(0, 10));
+          lines.push(e.text, "");
+        }
+      }
+      if (s.notes.length) {
+        lines.push("Notes");
+        for (const n of s.notes) {
+          lines.push(n.title);
+          lines.push(n.body, "");
+        }
+      }
+      for (const [id, p] of Object.entries(s.progress)) {
+        if (p.origin) lines.push(`Origin · ${id}`, p.origin, "");
+        if (p.letter) lines.push(`Letter · ${id}`, p.letter, "");
+      }
+      lines.push("", "```json", JSON.stringify(s, null, 2), "```");
+      return lines.join("\n");
+    },
+    eraseKept: () => {
+      const next: Saved = { onboarded: get().onboarded, journal: [], notes: [], progress: {} };
+      persist(next);
+      set({ ...next, focus: undefined, focusKind: undefined, walking: null, room: "hub" });
+    },
+  };
+});
+
+===== FILE: src/journey/journey.css =====
 
 .jny {
   --jny-ink: var(--color-fg);
@@ -4318,6 +4760,269 @@ LINES: 1330
   animation: jnyShimmer 1.6s linear infinite;
 }
 
+.jny-listen-stage {
+  min-height: 100dvh;
+}
+
+.jny-listen-core {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 14rem;
+  padding: 0.4rem 0 0.6rem;
+}
+
+.jny-press {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  width: min(100%, 21rem);
+  min-height: 12.4rem;
+  border: 0;
+  padding: 0.9rem 0 0;
+  background: transparent;
+  color: var(--jny-ink);
+  isolation: isolate;
+  transition: transform 150ms ease;
+}
+.jny-press:active {
+  transform: scale(0.96);
+}
+.jny-press strong {
+  position: relative;
+  z-index: 1;
+  margin-top: 0.8rem;
+  font-family: var(--font-serif);
+  font-size: 1.35rem;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  font-style: normal;
+}
+.jny-press em {
+  position: relative;
+  z-index: 1;
+  margin-top: 0.85rem;
+  font: 400 0.64rem/1.2 var(--font-sans);
+  letter-spacing: 0.01em;
+  color: var(--jny-dim);
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.jny-press-disc {
+  position: relative;
+  z-index: 1;
+  width: 6.9rem;
+  height: 6.9rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+}
+.jny-press-glass {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 46%, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.1) 48%, rgba(255, 255, 255, 0.28) 100%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.22) 0%, rgba(255, 255, 255, 0.06) 100%);
+  backdrop-filter: blur(24px) saturate(170%);
+  -webkit-backdrop-filter: blur(24px) saturate(170%);
+  box-shadow:
+    inset 0 2px 2px rgba(255, 255, 255, 0.55),
+    inset 0 -22px 28px rgba(0, 0, 0, 0.22),
+    0 0 0 1px rgba(255, 255, 255, 0.38),
+    0 20px 40px rgba(0, 0, 0, 0.4);
+}
+.jny-press-edge {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle, transparent 56%, rgba(255, 255, 255, 0.5) 74%, rgba(255, 255, 255, 0.18) 100%);
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+.jny-press-sheen {
+  position: absolute;
+  top: 13%;
+  left: 20%;
+  width: 60%;
+  height: 20%;
+  border-radius: 50%;
+  transform: rotate(-18deg);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.2) 55%, transparent);
+  filter: blur(0.6px);
+  pointer-events: none;
+}
+.jny-press-spark {
+  position: absolute;
+  top: 22%;
+  left: 27%;
+  width: 9px;
+  height: 5px;
+  border-radius: 50%;
+  background: #fff;
+  opacity: 0.8;
+  filter: blur(0.4px);
+  pointer-events: none;
+}
+.jny-press-rim {
+  position: absolute;
+  inset: 11px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  pointer-events: none;
+}
+.jny-press-halo {
+  position: absolute;
+  top: -0.2rem;
+  width: 8.8rem;
+  height: 8.8rem;
+  border-radius: 50%;
+  border: 0;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.05) 40%, transparent 68%);
+  animation: jnyPressHalo 4.8s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.jny-listen-copy {
+  margin: 0 auto 0.2rem;
+  max-width: 22rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+.jny-listen-copy p {
+  margin: 0;
+  font: 400 0.8rem/1.45 var(--font-sans);
+  color: var(--jny-dim);
+}
+.jny-listen-copy span {
+  display: block;
+  white-space: nowrap;
+}
+
+.jny-rec-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font: 500 0.78rem/1 var(--font-sans);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--color-fg) 78%, transparent);
+}
+.jny-rec-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e24b4b;
+  box-shadow: 0 0 10px rgba(226, 75, 75, 0.8);
+  animation: jnyRec 1.2s ease-in-out infinite;
+}
+
+.jny-wave-wrap {
+  width: min(100%, 22rem);
+  height: 5.6rem;
+  margin-top: 1.1rem;
+  border: 0;
+  padding: 0.4rem 0.6rem;
+  border-radius: 1.4rem;
+  background: #12110f;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+.jny-wave {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.jny-wave-hint {
+  margin: 0.7rem 0 0;
+  font: 500 0.68rem/1 var(--font-sans);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--jny-faint);
+}
+
+.jny-caption {
+  margin: 0.4rem 0 0;
+  max-height: 6.2rem;
+  overflow: hidden;
+  font-family: var(--font-serif);
+  font-size: 1.05rem;
+  line-height: 1.45;
+  color: color-mix(in oklab, var(--color-fg) 82%, transparent);
+  mask-image: linear-gradient(180deg, transparent, #000 18%, #000 82%, transparent);
+}
+.jny-caption em {
+  font-style: italic;
+  color: var(--jny-dim);
+}
+
+.jny-forming {
+  list-style: none;
+  margin: 0.7rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  max-height: 28dvh;
+  overflow: auto;
+}
+.jny-forming-title {
+  margin: 0 0 0.15rem;
+  font-family: var(--font-serif);
+  font-size: 1.15rem;
+}
+.jny-forming li {
+  margin: 0;
+  padding: 0.7rem 0.85rem;
+  border-radius: 1rem;
+  background: var(--jny-face);
+  font-family: var(--font-serif);
+  font-size: 0.98rem;
+  line-height: 1.35;
+  animation: jnyRise 420ms var(--ease-smooth-out, ease) both;
+}
+
+.jny-quiet-row {
+  display: flex;
+  justify-content: center;
+  gap: 1.4rem;
+  margin-top: 1.1rem;
+}
+
+.jny-listen-kept {
+  margin-top: 0.8rem;
+  max-height: 28dvh;
+}
+
+@keyframes jnyPressHalo {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.98);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.03);
+  }
+}
+@keyframes jnyRec {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
 @keyframes jnyRise {
   from {
     opacity: 0;
@@ -4347,7 +5052,9 @@ body.jny-immersive nav[aria-label="Primary"] {
 
 @media (prefers-reduced-motion: reduce) {
   .jny-orb,
-  .jny-live-dot {
+  .jny-live-dot,
+  .jny-press-halo,
+  .jny-rec-dot {
     animation: none;
   }
   .jny-cta,
@@ -4388,1122 +5095,131 @@ body.jny-immersive nav[aria-label="Primary"] {
   }
 }
 
+===== FILE: CLAUDE.md =====
 
-========================================================================
-FILE: src/styles.css
-BYTES: 8709
-LINES: 411
-========================================================================
-
-@import "tailwindcss";
-
-@theme {
-  --color-bg: #0b0c0a;
-  --color-surface: #141512;
-  --color-fg: #e8e4d8;
-  --color-muted: #9a9486;
-  --color-faint: #6a655c;
-  --color-primary: #c4bdb0;
-  --color-border: #2a2924;
-  --color-quote: #c9b8a0;
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Instrument Serif", "Iowan Old Style", Georgia, serif;
-  --radius: 0.75rem;
-  --motion-quick: 150ms;
-  --motion-fast: 250ms;
-  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-@layer base {
-  html {
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    background: var(--color-bg);
-    color: var(--color-fg);
-  }
-  button:not(:disabled),
-  [role="button"]:not(:disabled) {
-    cursor: pointer;
-  }
-  h1,
-  h2,
-  h3 {
-    text-wrap: balance;
-  }
-  p {
-    text-wrap: pretty;
-  }
-}
-
-.atmosphere-wash {
-  background: radial-gradient(
-    120% 80% at 50% 0%,
-    color-mix(in oklab, var(--color-fg) 8%, transparent),
-    transparent 55%
-  );
-}
-
-.atmosphere-shaft {
-  background: linear-gradient(
-    180deg,
-    color-mix(in oklab, var(--color-fg) 10%, transparent),
-    transparent 70%
-  );
-  filter: blur(48px);
-  opacity: 0.7;
-}
-
-@keyframes selah-breathe {
-  0%,
-  100% {
-    transform: scale(1);
-    opacity: 0.45;
-  }
-  50% {
-    transform: scale(1.08);
-    opacity: 0.9;
-  }
-}
-
-.selah-breathe {
-  animation: selah-breathe 8s var(--ease-smooth-out) infinite;
-}
-
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.known {
-  position: fixed;
-  inset: 0;
-  height: 100dvh;
-  overflow: hidden;
-  background: #05070b;
-  color: #e8e4d8;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.known-canvas {
-  position: absolute !important;
-  inset: 0;
-  pointer-events: none;
-}
-
-.known-scroller {
-  position: absolute;
-  inset: 0;
-  z-index: 5;
-  overflow-y: auto;
-  overscroll-behavior-y: contain;
-  scroll-snap-type: y mandatory;
-  scrollbar-width: none;
-}
-.known-scroller::-webkit-scrollbar { display: none; }
-
-.known-section {
-  height: 100dvh;
-  scroll-snap-align: start;
-  scroll-snap-stop: always;
-}
-
-.known-hud {
-  position: absolute;
-  inset: 0;
-  z-index: 10;
-  display: flex;
-  flex-direction: column;
-  pointer-events: none;
-}
-
-.known-scrim {
-  position: absolute;
-  inset: 0 0 auto;
-  height: 42%;
-  background: linear-gradient(180deg, rgba(5, 7, 11, 0.9) 0%, rgba(5, 7, 11, 0.5) 58%, rgba(5, 7, 11, 0) 100%);
-}
-
-.creation .known-scrim {
-  height: 62%;
-  background: linear-gradient(180deg, rgba(5, 7, 11, 0.94) 0%, rgba(5, 7, 11, 0.62) 52%, rgba(5, 7, 11, 0) 100%);
-}
-
-.creation[data-day="day1"] .known-scrim {
-  height: 52%;
-  background: linear-gradient(180deg, rgba(4, 5, 10, 0.88) 0%, rgba(4, 5, 10, 0.42) 58%, rgba(4, 5, 10, 0) 100%);
-}
-
-.creation[data-day="wings"] .known-scrim {
-  height: 40%;
-  background: linear-gradient(180deg, rgba(7, 8, 12, 0.94) 0%, rgba(7, 8, 12, 0.4) 70%, rgba(7, 8, 12, 0) 100%);
-}
-
-.creation[data-day="house"] .known-scrim {
-  height: 48%;
-  background: linear-gradient(180deg, rgba(12, 11, 16, 0.94) 0%, rgba(12, 11, 16, 0.45) 62%, rgba(12, 11, 16, 0) 100%);
-}
-
-.book-slide {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  height: 100dvh;
-  overflow: hidden;
-  background: #07080c;
-  color: #e8e4d8;
-  padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
-}
-
-.book-slide-head {
-  position: relative;
-  z-index: 2;
-  flex: 0 0 auto;
-  padding-top: calc(0.75rem + env(safe-area-inset-top));
-  padding-left: max(1.25rem, env(safe-area-inset-left));
-  padding-right: max(1.25rem, env(safe-area-inset-right));
-}
-
-.book-slide-body {
-  margin: 0.55rem 0 0;
-  max-width: 22rem;
-  color: #c8c2b6;
-  font: 400 14px/1.45 var(--font-sans);
-}
-
-.book-slide .known-reading {
-  margin-top: 0.7rem;
-}
-
-.book-slide .known-scripture {
-  margin-top: 0.85rem;
-}
-
-.book-slide-frame {
-  position: relative;
-  flex: 1 1 auto;
-  min-height: 0;
-  margin: 0.85rem 1.15rem 0.35rem;
-  border-radius: 1.05rem;
-  overflow: hidden;
-  background: #07080c;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
-}
-
-.book-slide-frame canvas {
-  display: block;
-  width: 100% !important;
-  height: 100% !important;
-}
-
-
-.known-head {
-  position: relative;
-  padding-top: calc(0.75rem + env(safe-area-inset-top));
-  padding-left: max(1.25rem, env(safe-area-inset-left));
-  padding-right: max(1.25rem, env(safe-area-inset-right));
-}
-
-.known-close {
-  pointer-events: auto;
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-  border: 0;
-  padding: 0;
-  margin: -0.4rem 0 0.2rem;
-  background: transparent;
-  color: #e8e4d8;
-  font: 500 15px/1 var(--font-sans);
-  cursor: pointer;
-}
-
-.known-kicker {
-  margin: 0;
-  color: rgba(196, 189, 176, 0.85);
-  font: 500 10px/1.4 var(--font-sans);
-  letter-spacing: 0.3em;
-  text-transform: uppercase;
-}
-
-.known-title {
-  margin: 0.6rem 0 0;
-  max-width: 20rem;
-  font-family: var(--font-serif);
-  font-size: clamp(1.8rem, 7.6vw, 2.6rem);
-  font-weight: 400;
-  letter-spacing: -0.01em;
-  line-height: 1.08;
-  outline: none;
-}
-
-.known-body {
-  margin: 0.7rem 0 0;
-  max-width: 21rem;
-  color: #c8c2b6;
-  font: 13px/1.5 var(--font-sans);
-}
-
-.known-reading {
-  margin: 0.8rem 0 0;
-  max-width: 20rem;
-  font-family: var(--font-serif);
-  font-size: clamp(1.15rem, 4.6vw, 1.45rem);
-  line-height: 1.25;
-  color: #f0dcc0;
-}
-
-.known-scripture {
-  margin: 0.9rem 0 0;
-  max-width: 21rem;
-}
-.known-scripture p {
-  margin: 0;
-  font-family: var(--font-serif);
-  font-size: 1.05rem;
-  line-height: 1.5;
-  color: #efe9dc;
-}
-.known-scripture cite {
-  display: block;
-  margin-top: 0.3rem;
-  color: rgba(196, 189, 176, 0.8);
-  font: 500 10px/1 var(--font-sans);
-  font-style: normal;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-}
-
-.known-still {
-  margin: 1rem 0 0;
-  max-width: 21rem;
-  color: #d7e4f5;
-  font: 13px/1.5 var(--font-sans);
-  opacity: 0.85;
-  transition: opacity 900ms ease;
-}
-.known-still-off { opacity: 0; }
-
-.known-foot {
-  pointer-events: none;
-  position: relative;
-  margin-top: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.7rem;
-  padding: 0 max(1rem, env(safe-area-inset-right)) calc(5.75rem + env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
-}
-.known-foot > button,
-.known-thread-stops { pointer-events: auto; }
-
-body.world-deep .known-foot {
-  padding-bottom: calc(1.4rem + env(safe-area-inset-bottom));
-}
-
-.known-source {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: #9a9486;
-  font: 500 11px/1 var(--font-sans);
-  letter-spacing: 0.06em;
-  text-decoration: underline;
-  text-underline-offset: 0.2em;
-  cursor: pointer;
-}
-
-.known-thread {
-  width: min(100%, 18rem);
-  position: relative;
-}
-.known-thread svg { display: block; width: 100%; height: 8px; overflow: visible; }
-.known-thread line { stroke: rgba(232, 228, 216, 0.22); stroke-width: 1; }
-.known-thread .known-thread-tick { stroke: rgba(232, 228, 216, 0.45); }
-.known-thread .known-thread-lit { fill: rgba(232, 228, 216, 0.9); }
-.known-thread circle { fill: #e8e4d8; }
-.known-thread-stops {
-  position: absolute;
-  inset: -20px 0;
-  display: flex;
-}
-.known-thread-stops button {
-  flex: 1;
-  min-height: 44px;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-}
-
-.known-evidence { position: absolute; inset: 0; z-index: 20; }
-.known-evidence-scrim {
-  position: absolute;
-  inset: 0;
-  border: 0;
-  background: rgba(5, 7, 11, 0.55);
-}
-.known-evidence-sheet {
-  position: absolute;
-  inset: auto 0 0;
-  max-height: 78dvh;
-  overflow-y: auto;
-  border-radius: 1.4rem 1.4rem 0 0;
-  padding: 1rem max(1.25rem, env(safe-area-inset-right)) calc(1.5rem + env(safe-area-inset-bottom)) max(1.25rem, env(safe-area-inset-left));
-  background: #141512;
-  color: #e8e4d8;
-}
-.known-evidence-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.6rem;
-}
-.known-evidence-head p {
-  margin: 0;
-  color: #9a9486;
-  font: 500 10px/1 var(--font-sans);
-  letter-spacing: 0.25em;
-  text-transform: uppercase;
-}
-.known-evidence-head button {
-  min-height: 44px;
-  min-width: 44px;
-  border: 0;
-  background: transparent;
-  color: #e8e4d8;
-  font: 500 15px/1 var(--font-sans);
-  cursor: pointer;
-}
-.known-evidence-law {
-  margin: 1.2rem 0 0;
-  color: #8d877a;
-  font: 13px/1.5 var(--font-sans);
-}
-
-body.world-deep nav[aria-label="Primary"] {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.claim-list { list-style: none; margin: 0; padding: 0; }
-
-@media (prefers-reduced-motion: reduce) {
-  .atmosphere-shaft {
-    filter: none;
-  }
-  .selah-breathe {
-    animation: none;
-    opacity: 0.7;
-  }
-}
-
-
-
-========================================================================
-FILE: src/components/dock.tsx
-BYTES: 1619
-LINES: 42
-========================================================================
-
-import { Link, useRouterState } from "@tanstack/react-router";
-import { BookOpen, Clock, Home, Orbit } from "lucide-react";
-
-const TABS = [
-  { to: "/", label: "Home", icon: Home },
-  { to: "/bible", label: "Bible", icon: BookOpen },
-  { to: "/immerse", label: "Immerse", icon: Orbit },
-  { to: "/journey", label: "Journey", icon: Clock },
-] as const;
-
-export function Dock() {
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
-  if (pathname === "/source" || pathname === "/handoff") return null;
-
-  return (
-    <nav
-      aria-label="Primary"
-      className="dock pointer-events-auto fixed bottom-4 left-1/2 z-30 w-[min(92vw,26rem)] -translate-x-1/2 rounded-full border border-white/10 bg-black/45 px-2 py-2 shadow-[0_18px_40px_-16px_rgba(0,0,0,0.75)] backdrop-blur-xl"
-    >
-      <ul className="grid grid-cols-4 items-center">
-        {TABS.map((tab) => {
-          const on = pathname === tab.to;
-          const Icon = tab.icon;
-          return (
-            <li key={tab.to} className="flex justify-center">
-              <Link
-                to={tab.to}
-                className={`flex min-h-12 min-w-[4.4rem] flex-col items-center justify-center gap-0.5 rounded-full px-3 py-1.5 text-[11px] tracking-wide transition-colors duration-150 ${
-                  on ? "bg-white/10 text-fg" : "text-muted"
-                }`}
-                aria-current={on ? "page" : undefined}
-              >
-                <Icon className="size-[18px]" strokeWidth={1.6} />
-                {tab.label}
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
-    </nav>
-  );
-}
-
-
-========================================================================
-FILE: src/routes/__root.tsx
-BYTES: 2131
-LINES: 63
-========================================================================
-
-import { createRootRoute, HeadContent, Outlet, Scripts, useRouterState } from "@tanstack/react-router";
-import { AuthProvider } from "@/lib/auth/provider";
-import { PreviewHostBridge } from "@/components/preview-host-bridge";
-import { Atmosphere } from "@/components/atmosphere";
-import { Dock } from "@/components/dock";
-import { StayHydrate } from "@/components/stay-hydrate";
-import appCss from "../styles.css?url";
-
-const APP_NAME = "Selah";
-
-function Shell() {
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const fullBleed = pathname === "/" || pathname === "/immerse" || pathname === "/bible" || pathname === "/journey" || pathname === "/house";
-  return (
-    <>
-      {fullBleed ? null : <Atmosphere />}
-      <Outlet />
-      <Dock />
-    </>
-  );
-}
-
-export const Route = createRootRoute({
-  head: () => ({
-    meta: [
-      { charSet: "utf-8" },
-      { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: APP_NAME },
-      { name: "theme-color", content: "#0b0c0a" },
-      {
-        name: "description",
-        content: "Beholding creation until wonder becomes worship.",
-      },
-    ],
-    links: [
-      { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
-      { rel: "preconnect", href: "https://fonts.googleapis.com" },
-      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
-      { rel: "stylesheet", href: appCss },
-      { rel: "manifest", href: "/__grok/manifest.webmanifest" },
-      { rel: "apple-touch-icon", href: "/__grok/icon-180.png" },
-      {
-        rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@300;400;500;600&display=swap",
-      },
-    ],
-  }),
-  component: () => (
-    <html lang="en" className="antialiased" suppressHydrationWarning>
-      <head>
-        <HeadContent />
-      </head>
-      <body className="bg-bg text-fg font-sans">
-        <PreviewHostBridge />
-        <AuthProvider>
-          <StayHydrate />
-          <Shell />
-        </AuthProvider>
-        <Scripts />
-      </body>
-    </html>
-  ),
-});
-
-
-========================================================================
-FILE: src/routes/bible.tsx
-BYTES: 2064
-LINES: 46
-========================================================================
-
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { Play } from "lucide-react";
-
-export const Route = createFileRoute("/bible")({ component: Bible });
-
-function Bible() {
-  return (
-    <main className="flex min-h-dvh flex-col bg-[#070605] text-fg">
-      <div className="px-5 pt-14">
-        <h1 className="font-sans text-[2.15rem] font-semibold tracking-tight text-fg">Psalm 139</h1>
-        <p className="mt-3 text-[15px] text-muted">You Have Searched Me and Known Me</p>
-
-        <div className="mt-6 flex items-center gap-4 rounded-2xl border border-border bg-surface/80 px-4 py-3">
-          <div className="flex size-12 shrink-0 items-center justify-center rounded-full border border-border">
-            <Play className="size-5 fill-fg text-fg" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-sm text-fg">Listen</p>
-              <p className="text-xs text-faint">0:00 · 2:27</p>
-            </div>
-            <div className="mt-2 h-px w-full bg-fg/20" />
-            <p className="mt-2 text-[11px] leading-relaxed text-faint">
-              Read by Bob Souer · Public domain · verse timing aligned by Selah
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <p className="mt-10 px-5 text-[15px] text-muted">You Have Searched Me and Known Me</p>
-
-      <section className="mt-6 flex flex-1 flex-col justify-end bg-[#1c1612] px-6 pb-32 pt-16">
-        <p className="font-serif text-[2.35rem] leading-[1.15] text-[#efe6d6]">
-          O LORD, You have searched me and known me.
-        </p>
-        <p className="mt-10 text-right text-[11px] tracking-[0.22em] text-faint uppercase">Psalm 139:1</p>
-        <Link
-          to="/immerse"
-          className="mt-10 inline-flex min-h-12 w-fit items-center rounded-full border border-[#efe6d6]/25 px-5 text-[11px] tracking-[0.22em] text-[#efe6d6] uppercase"
-        >
-          Enter this verse ↑
-        </Link>
-      </section>
-    </main>
-  );
-}
-
-
-========================================================================
-FILE: package.json
-BYTES: 3413
-LINES: 101
-========================================================================
-
-{
-  "name": "app-builder-workspace",
-  "private": true,
-  "sideEffects": false,
-  "type": "module",
-  "overrides": {
-    "nf3": "0.3.17"
-  },
-  "scripts": {
-    "dev": "node scripts/with-app-env.mjs vite dev --host 0.0.0.0 --port 8080",
-    "build": "node scripts/with-app-env.mjs vite build && npm run db:migrate",
-    "db:migrate": "node scripts/migrate.mjs",
-    "build:dev": "node scripts/with-app-env.mjs vite build --mode development",
-    "preview": "node scripts/with-app-env.mjs vite preview",
-    "typecheck": "tsc --noEmit",
-    "check:auth": "node scripts/check-auth-invariant.mjs",
-    "test": "node --test 'scripts/**/*.test.mjs'",
-    "lint": "eslint .",
-    "format": "prettier --write ."
-  },
-  "dependencies": {
-    "@electric-sql/pglite": "^0.5.4",
-    "@hookform/resolvers": "^5.7.0",
-    "@radix-ui/react-accordion": "^1.2.12",
-    "@radix-ui/react-alert-dialog": "^1.1.15",
-    "@radix-ui/react-avatar": "^1.1.11",
-    "@radix-ui/react-checkbox": "^1.3.3",
-    "@radix-ui/react-collapsible": "^1.1.12",
-    "@radix-ui/react-dialog": "^1.1.15",
-    "@radix-ui/react-dropdown-menu": "^2.1.16",
-    "@radix-ui/react-label": "^2.1.8",
-    "@radix-ui/react-popover": "^1.1.15",
-    "@radix-ui/react-progress": "^1.1.8",
-    "@radix-ui/react-radio-group": "^1.3.8",
-    "@radix-ui/react-scroll-area": "^1.2.10",
-    "@radix-ui/react-select": "^2.2.6",
-    "@radix-ui/react-separator": "^1.1.8",
-    "@radix-ui/react-slider": "^1.3.6",
-    "@radix-ui/react-slot": "^1.2.4",
-    "@radix-ui/react-switch": "^1.2.6",
-    "@radix-ui/react-tabs": "^1.1.13",
-    "@radix-ui/react-toggle": "^1.1.10",
-    "@radix-ui/react-toggle-group": "^1.1.11",
-    "@radix-ui/react-tooltip": "^1.2.8",
-    "@react-three/drei": "^10.7.8",
-    "@react-three/fiber": "^9.7.0",
-    "@react-three/postprocessing": "^3.0.5",
-    "@tailwindcss/vite": "^4.3.0",
-    "@tanstack/react-query": "^5.101.0",
-    "@tanstack/react-router": "^1.170.0",
-    "@tanstack/react-start": "^1.168.0",
-    "@tanstack/react-table": "^8.21.0",
-    "@tanstack/router-plugin": "^1.168.0",
-    "better-auth": "~1.6.30",
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
-    "cmdk": "^1.1.1",
-    "date-fns": "^4.0.0",
-    "gsap": "^3.15.0",
-    "kysely": "^0.28.5",
-    "lucide-react": "^0.510.0",
-    "pg": "^8.16.3",
-    "postprocessing": "^6.39.4",
-    "react": "^19.2.0",
-    "react-day-picker": "^9.14.0",
-    "react-dom": "^19.2.0",
-    "react-hook-form": "^7.54.0",
-    "react-resizable-panels": "^4.6.5",
-    "recharts": "^2.13.0",
-    "sonner": "^2.0.7",
-    "tailwind-merge": "^3.5.0",
-    "tailwindcss": "^4.3.0",
-    "three": "^0.185.1",
-    "tw-animate-css": "^1.3.4",
-    "vaul": "^1.1.2",
-    "zod": "^4.4.0",
-    "zustand": "^5.0.0"
-  },
-  "devDependencies": {
-    "@eslint/js": "^9.20.0",
-    "@types/node": "^22.16.5",
-    "@types/pg": "^8.11.10",
-    "@types/react": "^19.2.0",
-    "@types/react-dom": "^19.2.0",
-    "@types/three": "^0.185.4",
-    "@vitejs/plugin-react": "^5.2.0",
-    "eslint": "^9.20.0",
-    "eslint-config-prettier": "^10.1.1",
-    "eslint-plugin-prettier": "^5.2.6",
-    "eslint-plugin-react-hooks": "^5.2.0",
-    "eslint-plugin-react-refresh": "^0.4.20",
-    "globals": "^15.15.0",
-    "lightningcss": "^1.28.0",
-    "nitro": "3.0.260610-beta",
-    "playwright": "^1.62.0",
-    "prettier": "^3.4.0",
-    "typescript": "^5.7.0",
-    "typescript-eslint": "^8.56.1",
-    "vite": "^8.2.0"
-  }
-}
-
-
-========================================================================
-FILE: tsconfig.json
-BYTES: 602
-LINES: 21
-========================================================================
-
-{
-  "compilerOptions": {
-    "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "jsx": "react-jsx",
-    "strict": true,
-    "isolatedModules": true,
-    "skipLibCheck": true,
-    // `src/lib/db.ts` imports scripts/migration-plan.mjs; checkJs types the
-    // implementation itself instead of a hand-written declaration beside it.
-    "allowJs": true,
-    "checkJs": true,
-    "noEmit": true,
-    "types": ["vite/client", "node"],
-    "baseUrl": ".",
-    "paths": { "@/*": ["./src/*"] }
-  },
-  "include": ["src", "server"]
-}
-
-
-========================================================================
-FILE: vite.config.ts
-BYTES: 7327
-LINES: 209
-========================================================================
-
-import { readdirSync } from "node:fs";
-import { join } from "node:path";
-import type { Plugin } from "vite";
-import { defineConfig } from "vite";
-import { tanstackStart } from "@tanstack/react-start/plugin/vite";
-import viteReact from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
-import { nitro } from "nitro/vite";
-// @ts-expect-error JS plugin alongside the TS vite config
-import { grokPwaPlugin } from "./scripts/grok-pwa-plugin.mjs";
-// @ts-expect-error JS plugin alongside the TS vite config
-import { appEnvPlugin } from "./scripts/app-env-plugin.mjs";
-import { isMigrationFile } from "./scripts/migration-plan.mjs";
-
-/** The files `src/lib/db.ts` globs — same directory, same non-recursive scope. */
-function hasGlobbedMigrations(root: string): boolean {
-  try {
-    return readdirSync(join(root, "migrations")).some(isMigrationFile);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Finish PGLite bootstrap during dev-server setup (before traffic). Vite awaits
- * async `configureServer` hooks. Production: `src/lib/db` kicks `ensureDbReady`
- * on import.
- *
- * Vite awaiting the hook puts this on time-to-first-render, so an app with no
- * migrations — no schema to apply — skips it entirely rather than paying for a
- * PGLite instance it never queries.
- */
-function pgliteBootstrapPlugin(): Plugin {
-  return {
-    name: "app-builder:pglite-bootstrap",
-    apply: "serve",
-    async configureServer(server) {
-      if (!hasGlobbedMigrations(server.config.root)) return;
-      try {
-        const mod = (await server.ssrLoadModule("/src/lib/db.ts")) as {
-          ensureDbReady?: () => Promise<void>;
-        };
-        if (typeof mod.ensureDbReady === "function") {
-          await mod.ensureDbReady();
-        }
-      } catch (err) {
-        console.error("[app-builder] DB bootstrap failed:", err);
-        throw err;
-      }
-    },
-  };
-}
-
-/**
- * Live-preview OAuth popup — handled HERE so the agent never has to create a
- * `/auth/popup` route (and cannot break it by scaffolding a React page that
- * paints the full app shell in the popup).
- *
- * `signIn` (client.ts) opens `/auth/popup?providerId=…` in a top-level window.
- * This middleware runs before TanStack Start, calls `handleAuthPopupRequest`,
- * and returns the 302 / completion HTML. Deployed apps do not use the popup
- * (full-page OAuth redirect), so `apply: "serve"` is enough.
- */
-function authPopupPlugin(): Plugin {
-  return {
-    name: "app-builder:auth-popup",
-    apply: "serve",
-    configureServer(server) {
-      // Register immediately (not in a returned post-hook) so we run BEFORE
-      // TanStack Start / the SPA HTML fallback. A model-authored
-      // `src/routes/auth/popup.tsx` React page must never win this path.
-      server.middlewares.use(async (req, res, next) => {
-        try {
-          const rawUrl = req.url ?? "";
-          const pathOnly = rawUrl.split("?", 1)[0] ?? "";
-          if (pathOnly !== "/auth/popup") {
-            next();
-            return;
-          }
-          if ((req.method ?? "GET").toUpperCase() !== "GET") {
-            res.statusCode = 405;
-            res.setHeader("content-type", "text/plain; charset=utf-8");
-            res.end("Method Not Allowed");
-            return;
-          }
-
-          const host = String(
-            req.headers["x-forwarded-host"] ?? req.headers.host ?? "localhost:8080",
-          );
-          const proto = String(
-            req.headers["x-forwarded-proto"] ??
-              ((req.socket as { encrypted?: boolean } | undefined)?.encrypted ? "https" : "http"),
-          );
-          const requestHeaders = new Headers();
-          for (const [key, value] of Object.entries(req.headers)) {
-            if (value === undefined) continue;
-            if (Array.isArray(value)) {
-              for (const v of value) requestHeaders.append(key, v);
-            } else {
-              requestHeaders.set(key, value);
-            }
-          }
-          // Ensure Host is the public preview host so Better Auth's dynamic
-          // baseURL / redirect_uri match the popup origin.
-          if (!requestHeaders.has("host")) requestHeaders.set("host", host);
-
-          const request = new Request(`${proto}://${host}${rawUrl}`, {
-            method: "GET",
-            headers: requestHeaders,
-          });
-
-          const mod = (await server.ssrLoadModule("/src/lib/auth/popup.server.ts")) as {
-            handleAuthPopupRequest: (req: Request) => Promise<Response>;
-          };
-          const response = await mod.handleAuthPopupRequest(request);
-
-          res.statusCode = response.status;
-          // Preserve multiple Set-Cookie headers (OAuth state + session).
-          const setCookies =
-            typeof response.headers.getSetCookie === "function"
-              ? response.headers.getSetCookie()
-              : [];
-          response.headers.forEach((value, key) => {
-            if (key.toLowerCase() === "set-cookie") return;
-            res.setHeader(key, value);
-          });
-          for (const cookie of setCookies) {
-            res.appendHeader("set-cookie", cookie);
-          }
-          const body = Buffer.from(await response.arrayBuffer());
-          res.end(body);
-        } catch (err) {
-          console.error("[app-builder] /auth/popup handler failed:", err);
-          if (!res.headersSent) {
-            res.statusCode = 500;
-            res.setHeader("content-type", "text/plain; charset=utf-8");
-            res.end("auth popup failed");
-          }
-        }
-      });
-    },
-  };
-}
-
-// `0.0.0.0:8080` is the live-preview contract — don't change host/port.
-// The dev server starts once `src/router.tsx` and `src/routes/` exist — see
-// AGENTS.md § "First scaffold".
-export default defineConfig(({ command, isPreview }) => ({
-  server: {
-    host: "0.0.0.0",
-    port: 8080,
-    strictPort: true,
-    watch: {
-      ignored: [
-        "**/attachments/**",
-        "**/artifacts/**",
-        "**/screenshots/**",
-        "**/.vercel/**",
-        "**/public/cosmos/**",
-        "**/public/sinai/**",
-        "**/public/knit/**",
-        "**/public/creation/**",
-        "**/public/house/**",
-        "**/public/handoff/**",
-        "**/public/cell/**",
-      ],
-    },
-  },
-  preview: {
-    host: "127.0.0.1",
-    port: 8081,
-    strictPort: true,
-  },
-  resolve: { tsconfigPaths: true },
-  optimizeDeps: {
-    include: [
-      "three",
-      "@react-three/fiber",
-      "@react-three/drei",
-      "@react-three/postprocessing",
-      "postprocessing",
-      "gsap",
-      "zustand",
-    ],
-  },
-  plugins: [
-    pgliteBootstrapPlugin(),
-    // Before tanstackStart so /auth/popup never falls through to the SPA.
-    authPopupPlugin(),
-    // Dev-only /__app-env, read by scripts/check-auth-invariant.mjs.
-    appEnvPlugin(),
-    // PWA head + ?install=1 tutorial page; runs before Start/Nitro.
-    grokPwaPlugin(),
-    tailwindcss(),
-    tanstackStart(),
-    ...(command === "build" || isPreview
-      ? [
-          nitro({
-            preset: "vercel",
-            // Auto-registers server/middleware/* (the PWA install page +
-            // manifest + head-tag middleware). Nitro v3 defaults serverDir to
-            // false, so removing this silently unwires /?install=1 on deploys.
-            serverDir: "./server",
-          }),
-        ]
-      : []),
-    viteReact(),
-  ],
-}));
-
-
-========================================================================
-FILE: tests/journey-paths.test.mjs
-BYTES: 7216
-LINES: 163
-========================================================================
-
-/**
- * The guided paths, and the promises their content has to keep.
- */
-import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import test from "node:test";
-import { fileURLToPath } from "node:url";
-
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const { PATHS, PATTERNS } = await import("../src/journey/paths.ts");
-
-test("a pattern is never a diagnosis, and always carries both of its faces", () => {
-  for (const path of PATHS) {
-    assert.ok(path.patterns?.length >= 8, `${path.id}: too few patterns to be recognisable to most people`);
-    const ids = path.patterns.map((p) => p.id);
-    assert.equal(new Set(ids).size, ids.length, `${path.id}: two patterns share an id`);
-  }
-  for (const pattern of PATTERNS) {
-    assert.ok(pattern.label.startsWith("I "), `${pattern.id}: a pattern is said in the first person`);
-    assert.ok(pattern.cost && pattern.cost.length > 20, `${pattern.id}: needs what it costs`);
-    assert.ok(pattern.gift && pattern.gift.length > 20, `${pattern.id}: needs what it is for`);
-  }
-});
-
-test("a path's patterns belong to that path", () => {
-  for (const path of PATHS) {
-    const own = new Set(path.patterns.map((p) => p.id));
-    const station = path.stations.find((s) => s.kind === "patterns");
-    assert.ok(station, `${path.id}: has patterns but no station offering them`);
-    for (const kind of ["sort", "mirror", "carry"]) {
-      if (!path.stations.some((s) => s.kind === kind)) continue;
-      assert.ok(own.size > 0, `${path.id}: a ${kind} station with no patterns of its own`);
-    }
-  }
-});
-
-function readerFacing() {
-  const out = [];
-  for (const path of PATHS) {
-    out.push(path.title, path.about, path.shape, path.kicker);
-    for (const station of path.stations) {
-      out.push(station.kicker, station.title, station.body, station.note, station.prompt, station.placeholder, station.reading);
-      out.push(...(station.openings ?? []));
-      out.push(...(station.buckets ?? []).map((b) => b.label));
-      for (const n of station.notes ?? []) out.push(n.text, n.caveat);
-    }
-  }
-  for (const p of PATTERNS) out.push(p.label, p.cost, p.gift);
-  return out.filter(Boolean).join(" \n ").toLowerCase();
-}
-
-test("nothing a reader sees counts days, scores them, or says they are behind", () => {
-  const forbidden = [
-    "streak", "every day", "daily goal", "keep it up", "you missed",
-    "you are behind", "on track", "your score", "level up", "badge", "reward",
-    "well done", "congratulations",
-  ];
-  const text = readerFacing();
-  for (const phrase of forbidden) {
-    assert.ok(!text.includes(phrase), `a reader is shown "${phrase}", which the constitution forbids`);
-  }
-});
-
-test("a path never claims to treat anyone", () => {
-  const claims = ["diagnos", "your therapy", "we will heal", "cure you", "treatment", "symptom"];
-  const text = readerFacing();
-  for (const claim of claims) {
-    assert.ok(!text.includes(claim), `a reader is shown "${claim}", which this has no business claiming`);
-  }
-});
-
-test("every station can be passed, and the path still ends somewhere", () => {
-  for (const path of PATHS) {
-    assert.ok(path.stations.length >= 10, `${path.id}: too short to be a walk`);
-    const ids = path.stations.map((s) => s.id);
-    assert.equal(new Set(ids).size, ids.length, `${path.id}: two stations share an id`);
-    const patternsAt = path.stations.findIndex((s) => s.kind === "patterns");
-    for (const kind of ["sort", "mirror"]) {
-      const at = path.stations.findIndex((s) => s.kind === kind);
-      if (at === -1) continue;
-      assert.ok(patternsAt !== -1, `${path.id}: a ${kind} station with nothing to work on`);
-      assert.ok(at > patternsAt, `${path.id}: ${kind} comes before anything has been tapped`);
-    }
-    for (const station of path.stations) {
-      assert.ok(station.kicker && station.title, `${path.id}/${station.id}: needs a kicker and a title`);
-      if (station.kind === "sort") assert.ok(station.buckets?.length, `${station.id}: sort needs buckets`);
-      if (station.kind === "letter") assert.ok(station.openings?.length, `${station.id}: the blank first line needs help`);
-    }
-  }
-});
-
-test("anything asserted as psychology names a source", () => {
-  for (const path of PATHS) {
-    for (const station of path.stations) {
-      for (const note of station.notes ?? []) {
-        assert.ok(note.text && note.text.length > 30, `${station.id}: a note with nothing in it`);
-        assert.ok(
-          note.source && note.source.length > 25,
-          `${station.id}: "${note.text.slice(0, 40)}…" is asserted with no source`,
-        );
-        if (note.url) assert.match(note.url, /^https:\/\//, `${station.id}: source URL must be https`);
-      }
-    }
-  }
-});
-
-test("the claims this genre gets wrong are not made", () => {
-  const unsupported = [
-    "stored in the body", "the body keeps", "polyvagal", "ventral vagal",
-    "inner child", "earned secure", "rewire", "reprogram", "your nervous system is",
-    "set by age", "the first three years determine",
-  ];
-  const text = readerFacing();
-  for (const phrase of unsupported) {
-    assert.ok(!text.includes(phrase), `a reader is shown "${phrase}", which was checked and is not supported`);
-  }
-});
-
-test("a sourced note always carries its qualification", () => {
-  for (const path of PATHS) {
-    for (const station of path.stations) {
-      for (const note of station.notes ?? []) {
-        assert.ok(
-          note.caveat && note.caveat.length > 40,
-          `${station.id}: "${note.text.slice(0, 40)}…" is shown with no qualification`,
-        );
-      }
-    }
-  }
-});
-
-test("scripture shown names its verse and the BSB", () => {
-  for (const path of PATHS) {
-    for (const station of path.stations) {
-      const verses = [...(station.scripture ? [station.scripture] : []), ...(station.scriptures ?? [])];
-      for (const sc of verses) {
-        assert.ok(sc.text && sc.text.length > 20, `${path.id}/${station.id}: empty verse`);
-        assert.ok(sc.reference.includes(`${sc.chapter}:${sc.verse}`), `${sc.reference} does not name its verse`);
-        if (sc.verseEnd) {
-          assert.ok(
-            sc.reference.includes(`${sc.verse}\u2013${sc.verseEnd}`),
-            `${sc.reference} shows two verses but names one`,
-          );
-        }
-        assert.match(sc.reference, /· BSB$/, `${sc.reference} does not name its translation`);
-      }
-    }
-  }
-});
-
-test("every field a walk stores is read back", () => {
-  const types = readFileSync(join(root, "src/journey/paths.ts"), "utf8");
-  const store = readFileSync(join(root, "src/journey/store.ts"), "utf8");
-  const fields = ["station", "tapped", "chosen", "origin", "letter", "sorted", "carrying"];
-  const block = /export type PathProgress = \{([\s\S]*?)\n\};/.exec(store);
-  assert.ok(block, "PathProgress is not where this test expects it");
-  for (const field of fields) {
-    assert.ok(new RegExp(`\\b${field}\\b`).test(block[1]), `PathProgress missing ${field}`);
-    assert.ok(new RegExp(`\\b${field}\\b`).test(store), `store never reads PathProgress.${field}`);
-  }
-  assert.ok(types.includes("export type Pattern"), "paths still own the content model");
-});
+# Selah · Journey — Claude handoff
+
+App: **Selah**. This package is the Journey section, including the **locked Notes listen page**.
+
+Repo: https://github.com/littlechapters/selah-journey
+
+Owner: David. Do not rename the product. It is not “Faith Meets Tuesday.”
+
+---
+
+## Locked page (2026-08-31) — Notes rest state
+
+David signed this off: **“This is perfect. Lock this page.”**
+
+Do not redesign the Notes home. Spec: [`src/journey/NOTES_LISTEN_LOCK.md`](src/journey/NOTES_LISTEN_LOCK.md).
+
+Exact UI:
+
+- Glass circular button (lens, not gold orb).
+- **Start Recording**
+- One-line hint: *Keep your phone where it can hear clearly.*
+- Subtext, these line breaks only:
+
+> Tap to record a sermon or a podcast.  
+> Selah transcribes as you listen and gathers  
+> the key points into clear, thoughtful notes.  
+>  
+> Save what stays with you.  
+> Return to it when you need it.
+
+Recording flow is live, not a black form: waveform, words as they are said, then keep/pass the speaker’s points.
+
+---
+
+## Product constitution (non-negotiable)
+
+- **BSB only** for scripture. Verbatim. No paraphrase of verses.
+- Picture stands beside the text. Worlds do not replace reading.
+- Do not invent counsel, diagnosis, application, or verses the speaker did not say. Sermon notes extract **their** points.
+- No gore, no spectacle. Tenth plague: both faces (Passover covering and the cost) if you ever touch Exodus.
+- Language stays Selah: short, plain, no slogans, no emoji in chrome.
+- Auth is **off**. Journey is kept on-device (`localStorage` `selah-journey-v3`). Do not add sign-in unless David asks.
+
+---
+
+## Journey map
+
+Three **preview** onboarding screens every visit (`PREVIEW_THRESHOLD_EVERY_VISIT = true` in `experience.tsx`). Flip to `false` before launch. Exact copy:
+
+1. Are you ready to / start your journey? — **Yes, I am.**
+2. A spiritual journey is a personal process of self-discovery and inner growth that moves beyond the physical ego to explore deeper questions about existence. — **Continue**
+3. Your journey / begins here. — **Begin my journey**
+
+Then **JOURNEY** hub (all caps). **Stay** is first. Rooms are the only primary options. No “Known” list, no “Continue — What you carry” on the hub (that lives inside Paths).
+
+Rooms (bible-style tiles):
+
+| n | Tile | Line |
+|---|---|---|
+| 01 | PATHS | Four walks |
+| 02 | JOURNAL | What is true |
+| 03 | FOCUS | One thing |
+| 04 | BREATH | Still |
+| 05 | NOTES | Listen to what is said |
+
+---
+
+## Notes listen — engineering
+
+**Rest:** `ListenSurface` in `listen.tsx`, hosted by `NotesRoom`.
+
+**Start:** `getUserMedia` → AnalyserNode waveform + ScriptProcessor PCM. SpeechRecognition (`webkit` on Safari) for live captions. `continuous` + restart on `onend`.
+
+**While live:** after ~80 words, `splitSermon` at most 3 times, ≥28s apart. Forming points appear under the caption.
+
+**Stop:** encode 16 kHz WAV (cap 8 minutes). If sitting > ~4s of samples, `transcribeSermon` → `POST https://api.x.ai/v1/stt` with `language=en`, `format=true`. Prefer STT text if it is at least ~60% as long as live words. Then one `splitSermon`. Deck: keep/pass. Save via `addNote(title, body, points)`.
+
+**xAI:** `process.env.XAI_API_KEY` server-only. Chat model `grok-4.5`. Cap spend: user-initiated, max 3 mid-splits + 1 STT + 1 final split per sitting.
+
+**Fallback:** mic denied → hint to write. No SpeechRecognition → words land on stop. STT/split fail → existing error lines, never crash.
+
+Write a line / paste a transcript still exist as secondary paths.
+
+---
+
+## Hub decisions already made (do not revert)
+
+- Title **JOURNEY**, not “Journey”, not “Faith Meets Tuesday”.
+- Stay first. Rooms only on the hub.
+- Apple/Tesla feel: tactile tiles, not black forms. Notes was the last room still living as a form; it is now the listen surface. Keep it that way.
+- Forced 3-question threshold is preview-only for David.
+
+---
+
+## Source layout
+
+```
+src/journey/
+  NOTES_LISTEN_LOCK.md   ← freeze
+  listen.tsx             ← Notes rest + recording
+  sermon.ts              ← split + STT
+  rooms.tsx              ← NotesRoom, Journal, Focus, Breath
+  hub.tsx                ← JOURNEY + Paths room
+  experience.tsx
+  onboarding.tsx
+  glow.tsx
+  chrome.tsx
+  play.tsx
+  walk.tsx
+  paths.ts
+  store.ts
+  journey.css
+```
+
+`SOURCE.md` in this repo concatenates those files so nothing is missing if a zip is opened without git.
+
+---
+
+## What not to do
+
+- Do not turn Notes back into “paste a transcript” as the home.
+- Do not add Monday.com action items, meeting UI, or a dashboard.
+- Do not gold-fill the button. It is glass.
+- Do not put the label inside the disc.
+- Do not change the five subtext lines or their breaks.
+- Do not add accounts, a database, or a different STT vendor.

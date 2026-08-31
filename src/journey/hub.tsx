@@ -11,7 +11,7 @@ const ROOMS: { id: Room; n: string; title: string; name: string; line: string; a
   { id: "journal", n: "02", title: "JOURNAL", name: "Journal", line: "What is true", art: "rules" },
   { id: "focus", n: "03", title: "FOCUS", name: "Focus", line: "One thing", art: "dot" },
   { id: "breath", n: "04", title: "BREATH", name: "Breath", line: "Still", art: "orb" },
-  { id: "notes", n: "05", title: "NOTES", name: "Notes", line: "A sermon kept", art: "quote" },
+  { id: "notes", n: "05", title: "NOTES", name: "Notes", line: "Listen to what is said", art: "quote" },
 ];
 
 function TileArt({ art }: { art: string }) {

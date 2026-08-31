@@ -5,6 +5,7 @@ import { Back, Choice, Choices, Cta, Reveal, Sheet, tap, useDrag, useImmersive }
 import { Dual } from "./play";
 import { FOCUS_KINDS, TONES, useJourney, type FocusKind, type JournalTone } from "./store";
 import { splitSermon } from "./sermon";
+import { ListenSurface } from "./listen";
 
 const OPENINGS = ["I am carrying", "I noticed", "I am grateful", "I cannot name it yet"];
 
@@ -480,6 +481,15 @@ export function NotesRoom() {
     setMode("home");
   };
 
+  const openDeck = (nextTitle: string, nextBody: string, nextPoints: string[]) => {
+    setTitle(nextTitle);
+    setBody(nextBody);
+    setPoints(nextPoints.map((text) => ({ text, keep: true })));
+    setPi(0);
+    setMode("deck");
+    tap();
+  };
+
   const keepPoints = async () => {
     setBusy(true);
     setError("");
@@ -490,6 +500,7 @@ export function NotesRoom() {
         setBusy(false);
         return;
       }
+      setTitle((t) => t.trim() || result.title);
       setPoints(result.points.map((text) => ({ text, keep: true })));
       setPi(0);
       setMode("deck");
@@ -661,47 +672,21 @@ export function NotesRoom() {
   }
 
   return (
-    <div className="jny jny-full">
-      <div className="jny-stage jny-threshold">
-        <Back onClick={() => setRoom("hub")}>Back</Back>
-        <p className="jny-kicker">Notes</p>
-        <Reveal text="What stayed?" />
-        <div className="jny-scroll">
-          <button type="button" className="jny-dest" onClick={() => setMode("write")}>
-            <small>Keep</small>
-            <h2>The line that stayed</h2>
-            <p>Who was speaking, and the sentence that would not leave.</p>
-          </button>
-          <button type="button" className="jny-dest" onClick={() => setMode("split")}>
-            <small>A sermon</small>
-            <h2>Break into points</h2>
-            <p>Paste what was said. Keep or pass each one.</p>
-          </button>
-          {notes.length ? (
-            <>
-              <div className="jny-section">
-                <h2>Kept</h2>
-                <span>{notes.length}</span>
-              </div>
-              {notes.map((n) => (
-                <button
-                  key={n.id}
-                  type="button"
-                  className="jny-kept-row"
-                  onClick={() => {
-                    tap();
-                    setOpenId(n.id);
-                    setMode("page");
-                  }}
-                >
-                  <time>{formatDay(n.at).rest}</time>
-                  <p>{n.title}</p>
-                </button>
-              ))}
-            </>
-          ) : null}
-        </div>
-      </div>
-    </div>
+    <ListenSurface
+      onBack={() => setRoom("hub")}
+      onBroken={openDeck}
+      onWrite={() => setMode("write")}
+      onPaste={() => setMode("split")}
+      kept={notes.map((n) => ({
+        id: n.id,
+        title: n.title,
+        at: n.at,
+        onOpen: () => {
+          tap();
+          setOpenId(n.id);
+          setMode("page");
+        },
+      }))}
+    />
   );
 }
